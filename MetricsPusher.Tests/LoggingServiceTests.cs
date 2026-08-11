@@ -85,6 +85,32 @@ namespace MetricsPusher.Tests
             Assert.Null(exception);
         }
 
+        [Theory]
+        [InlineData("first\nsecond")]
+        [InlineData("first\r\nsecond")]
+        [InlineData("first\rsecond")]
+        public void FormatLine_ShouldCollapseEmbeddedLineBreaks(string message)
+        {
+            // A message that can end a line can forge one. Exception text from an OS API
+            // reaches this method verbatim, so the guard belongs here rather than at the
+            // dozens of call sites.
+            string line = LoggingService.FormatLine("WARN", message);
+
+            Assert.DoesNotContain('\n', line);
+            Assert.DoesNotContain('\r', line);
+            Assert.Equal("[WARN] first second", line);
+        }
+
+        [Fact]
+        public void FormatLine_ShouldKeepLevelAndMessageTogether()
+        {
+            // Consecutive-duplicate suppression compares whole lines, so the same words at
+            // two levels must not compare equal.
+            Assert.NotEqual(
+                LoggingService.FormatLine("WARN", "sensor read failed"),
+                LoggingService.FormatLine("DEBUG", "sensor read failed"));
+        }
+
         [Fact]
         public void AllLogLevels_ShouldNotThrow_WhenCalledConcurrently()
         {

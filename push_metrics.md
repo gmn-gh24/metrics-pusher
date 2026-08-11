@@ -37,17 +37,26 @@ There is no broadcast, mDNS, or configuration. The sender **derives** the destin
    non-loopback interface with an IPv4 gateway, in OS enumeration order. (Deployment
    hazard: a VPN, Hyper-V, or WSL adapter that has a gateway can win, sending metrics
    to the wrong network's `.99`.)
-2. Replaces the **last octet with `99`** (e.g. PC at `192.168.1.42` → target
+2. **Requires that address to be on a private network** — RFC 1918 (`10/8`, `172.16/12`,
+   `192.168/16`), RFC 6598 CGNAT (`100.64/10`), or RFC 3927 link-local (`169.254/16`).
+   Anything else derives nothing and the attempt is skipped. Since v1.0.0: the payload is
+   cleartext and unauthenticated ([§10](#10-security-model)) and its destination is
+   *derived* rather than configured, so a PC holding a routable public IPv4 would
+   otherwise have pushed its host name, hardware and security posture to an unrelated
+   internet host once per second. That is outside the trusted-subnet premise §10 rests on,
+   not an instance of it.
+3. Replaces the **last octet with `99`** (e.g. PC at `192.168.1.42` → target
    `192.168.1.99`). This implicitly assumes a **/24 subnet**; on wider prefixes the
    derived address may land on a different logical segment.
-3. ICMP-pings that address with a **1000 ms per-ping timeout**: attempt *n* fires at
+4. ICMP-pings that address with a **1000 ms per-ping timeout**: attempt *n* fires at
    (n−1) × 60 s, 10 attempts total (≈ 9-minute window). The first successful ping
    **freezes** the endpoint `<derived-ip>:4210` for the sender's whole session.
-4. An attempt where the PC currently holds `.99` itself, or has no IPv4 gateway yet,
-   is skipped but still **consumes** one of the 10 attempts; the loop keeps going and
-   can succeed later (e.g. after DHCP settles). Only exhausting all 10 attempts
-   disables the feature until the tray app restarts. The endpoint is never re-derived
-   mid-session (a PC changing subnets keeps pushing to the old, now-wrong address).
+5. An attempt where the PC currently holds `.99` itself, is not on a private network, or
+   has no IPv4 gateway yet, is skipped but still **consumes** one of the 10 attempts; the
+   loop keeps going and can succeed later (e.g. after DHCP settles). Only exhausting all 10
+   attempts disables the feature until the tray app restarts. The endpoint is never
+   re-derived mid-session (a PC changing subnets keeps pushing to the old, now-wrong
+   address).
 
 **Consumer obligations that follow from this:**
 - The consumer device MUST hold the `.99` host address on its subnet (static IP or DHCP reservation).
@@ -541,6 +550,11 @@ A conforming consumer:
 - **Cleartext, unauthenticated, unsigned.** Anyone on the subnet can sniff the metrics
   (including security posture: `av`, `fw`, `reboot`, `win`) or forge datagrams to the
   consumer. This is an accepted trade-off for a trusted office LAN display.
+- **The trade-off is bounded to networks it can be made about.** The sender derives no
+  destination at all unless its own address is RFC 1918, CGNAT, or link-local
+  ([§1.1](#11-how-the-sender-finds-the-consumer)), so a PC on a routable public address
+  sends nothing rather than streaming its posture to a stranger. This bounds *who can be
+  reached*, not *what is protected*: on the local subnet the guarantees above are unchanged.
 - Consumers MUST therefore treat every field as untrusted input: bound-check string
   copies, range-check numerics before using them in math (e.g. bar widths), and never
   execute/interpret payload content.

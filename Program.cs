@@ -113,13 +113,27 @@ namespace MetricsPusher
             try
             {
                 using RegistryKey? key = Registry.LocalMachine.OpenSubKey(UacPolicyKey);
-                return key?.GetValue("EnableLUA") is int enableLua && enableLua == 0;
+                return IsUacDisabledValue(key?.GetValue("EnableLUA"));
             }
             catch (Exception ex)
             {
                 LoggingService.Debug($"Program: Failed to read the UAC policy: {ex.Message}");
                 return false;
             }
+        }
+
+        /// <summary>
+        /// The verdict on a raw <c>EnableLUA</c> registry value, split out from the read so it
+        /// can be pinned by tests: only an explicit zero means UAC is off. Anything else -
+        /// value set to 1, value absent, key absent, or a type the policy is not supposed to
+        /// have - is read as "UAC is on", which is the answer that keeps the refusal message
+        /// actionable when we cannot prove otherwise.
+        /// </summary>
+        /// <param name="enableLua">The value read from the policy key, or null when absent.</param>
+        /// <returns>True only for an integer zero.</returns>
+        internal static bool IsUacDisabledValue(object? enableLua)
+        {
+            return enableLua is int value && value == 0;
         }
     }
 }

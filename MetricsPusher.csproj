@@ -21,6 +21,13 @@
     <!-- Keep win-x64 in the restore graph so plain builds and self-contained publishes
          resolve the same package set (prevents churn between the two commands) -->
     <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <!-- The publish shape lives here, not only on the command line, for the same reason
+         RuntimeIdentifiers does: restore must resolve one package set. Single-file publish
+         pulls in Microsoft.NET.ILLink.Tasks, so with the shape only on the command line the
+         lock file gained that entry on every publish and lost it on every plain restore.
+         Neither property affects "dotnet build" - both are read at publish time. -->
+    <PublishSingleFile>true</PublishSingleFile>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <!-- NVAPI and NVML are 64-bit only; pinning the platform target means even an
          AnyCPU-configured build produces a 64-bit assembly. -->
     <Platforms>AnyCPU;x64</Platforms>

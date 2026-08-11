@@ -11,17 +11,23 @@ is authoritative for anything on the wire.
 ## Commands
 
 ```powershell
-dotnet build --warnaserror     # must be clean - StyleCop + Roslynator are enforced
-dotnet test                    # 227 tests
+dotnet build --warnaserror     # must be clean - StyleCop + Roslynator + CA5392 are enforced
+dotnet test                    # 275 tests
 dotnet test --filter "FullyQualifiedName~GpuDisplayPushServiceTests"
 
-# Portable single-file exe (~150-160 MB, no prerequisites on the target machine)
-dotnet publish MetricsPusher.csproj -c Release -r win-x64 --self-contained `
-  -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o "publish"
+# Portable single-file exe (~130 MB, no prerequisites on the target machine)
+dotnet publish MetricsPusher.csproj -c Release -r win-x64 --self-contained -o "publish"
 ```
 
 Always publish `--self-contained` and use forward slashes in `-o`. A published exe near
 3 MB means the publish silently fell back to framework-dependent.
+
+`PublishSingleFile` / `IncludeNativeLibrariesForSelfExtract` now live in the csproj rather
+than the command line, so restore resolves one package set: passed only on the command
+line, they added `Microsoft.NET.ILLink.Tasks` to `packages.lock.json` on every publish and
+dropped it on every plain restore. Both are publish-time only - `dotnet build` is
+unaffected. If you change either, re-check that the lock file is byte-identical after a
+build and after a publish.
 
 Logs: `%LOCALAPPDATA%\MetricsPusher\logs\app.log` (10 MB, rotates to `.1`–`.3`).
 
@@ -29,7 +35,7 @@ Logs: `%LOCALAPPDATA%\MetricsPusher\logs\app.log` (10 MB, rotates to `.1`–`.3`
 
 | Path | What it is |
 |---|---|
-| `Program.cs` | Elevation refusal, single-instance mutex, exception safety net |
+| `Program.cs` | Native-library pinning, elevation refusal, single-instance mutex, exception safety net |
 | `TrayApplicationContext.cs` | The whole UI: icon, Exit item, and when the push loop starts |
 | `Services/GpuDisplayPushService.cs` | Wire DTO, display discovery, the 1 Hz send loop |
 | `Services/GpuMonitorService.cs` | GPU sensors: NVML primary, NVAPI fallback |
@@ -37,7 +43,9 @@ Logs: `%LOCALAPPDATA%\MetricsPusher\logs\app.log` (10 MB, rotates to `.1`–`.3`
 | `Services/SystemMetricsService.cs` | CPU (PDH), RAM, disk, Windows version, AV/firewall/reboot |
 | `Services/SampledMetric.cs` | Per-metric read cadences for the NVAPI fallback |
 | `Services/LocalNetworkService.cs` | Local IPv4 selection, feeds address derivation |
+| `Services/SystemLibraryResolver.cs` | Pins every P/Invoked native library to absolute System32 |
 | `push_metrics.md` | Authoritative UDP wire protocol. Update it in the same change as any wire-visible change |
+| `README.md` | User-facing: requirements, publish, **where to install it and why** |
 
 ## Constraints
 
@@ -46,7 +54,16 @@ Logs: `%LOCALAPPDATA%\MetricsPusher\logs\app.log` (10 MB, rotates to `.1`–`.3`
   run when `IsInRole(Administrator)` is true, checked *before* the single-instance mutex
   so an elevated launch leaves nothing behind.
 - **One instance per session.** `Local\` mutex, not `Global\` — RDP and fast user
-  switching each get their own tray icon.
+  switching each get their own tray icon. That deliberately allows two same-user instances,
+  so anything touching a shared path must tolerate a second writer (`LoggingService` opens
+  the log `FileShare.ReadWrite` for exactly this reason).
+- **Every native library loads from System32, by absolute path.** `SystemLibraryResolver`
+  pins `nvml` / `pdh` / `wscapi` / `nvapi64`, and `CA5392` is an **error** so a new
+  `DllImport` cannot reintroduce a searched load. Adding a P/Invoke means adding its
+  library to `GuardedLibraries` unless it is a KnownDLL.
+- **.NET 10 (LTS).** Every publish is self-contained, so the runtime ships inside the exe
+  and gets no Windows Update servicing — the only patch path for a runtime CVE is
+  rebuilding this project. net8.0 went out of support on 10 Nov 2026.
 
 ## Invariants worth knowing before you change anything
 
@@ -62,6 +79,15 @@ Logs: `%LOCALAPPDATA%\MetricsPusher\logs\app.log` (10 MB, rotates to `.1`–`.3`
 - **`BuildPayload` is the single mapping.** `BuildPayloadJson` (what tests pin) and
   `BuildPayloadUtf8` (what is sent) are two projections of it, pinned byte-identical by a
   test. Never duplicate the mapping into one of them.
+- **A display address is only derived on a private network.** `DeriveDisplayAddress` returns
+  null outside RFC 1918 / CGNAT / link-local. The push is cleartext, unauthenticated, and
+  aimed at a *derived* address, so on a public IPv4 it would stream this machine's
+  antivirus/firewall/reboot posture to a stranger. Widening `IsPrivateIPv4` re-opens that.
+- **`LoggingService` collapses consecutive identical lines.** A handful of per-tick catch
+  blocks (the NVAPI sensor reads, RAM, free disk) are not edge-triggered and would repeat
+  at the 1 Hz sweep rate forever on a persistently broken sensor. The collapse applies the
+  codebase's "one line per failure streak" rule to every call site at once — do not remove
+  it in favour of trusting each call site to remember.
 - **The push loop starts once per session**, gated by an `Interlocked` exchange. It starts
   when a GPU is detected — either by `GpuMonitorService.Initialize` (which waits up to
   30 s) or by the 5 s poll in `InitializeAndStartPushAsync` that covers a probe outlasting

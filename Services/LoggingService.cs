@@ -59,11 +59,7 @@ namespace MetricsPusher.Services
             {
                 lock (_lock)
                 {
-                    // Level and text together, so the same words at two levels stay distinct.
-                    // Newlines are stripped rather than escaped: a message reaching here can
-                    // carry an OS exception string, and one line per event is what makes the
-                    // file readable and un-forgeable.
-                    string line = $"[{level}] {message}".ReplaceLineEndings(" ");
+                    string line = FormatLine(level, message);
 
                     if (line == _lastLine)
                     {
@@ -88,6 +84,24 @@ namespace MetricsPusher.Services
             {
                 // Silently fail - logging should never crash the app
             }
+        }
+
+        /// <summary>
+        /// The bracketed level and message as one physical line. Level and text travel
+        /// together so the same words at two levels stay distinct for the repeat check.
+        /// <para>
+        /// Line breaks inside the message are replaced rather than escaped. Messages here
+        /// can carry an OS exception string, and a message able to end a line is a message
+        /// able to forge one - "one event, one line" is what keeps the file both readable
+        /// and trustworthy.
+        /// </para>
+        /// </summary>
+        /// <param name="level">DEBUG, INFO, WARN or ERROR.</param>
+        /// <param name="message">The text, which may contain anything.</param>
+        /// <returns>A single line, with no timestamp and no trailing newline.</returns>
+        internal static string FormatLine(string level, string message)
+        {
+            return $"[{level}] {message}".ReplaceLineEndings(" ");
         }
 
         /// <summary>

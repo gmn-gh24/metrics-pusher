@@ -71,6 +71,14 @@ Logs: `%LOCALAPPDATA%\MetricsPusher\logs\app.log` (10 MB, rotates to `.1`–`.3`
   `VramIntervalMs` / `LostSweepsBeforeDrop` move together — the comment above
   `LostSweepsBeforeDrop` in `GpuMonitorService.cs` spells out the false-drop window that
   opens if one moves alone.
+- **Three version numbers, independent — never derive one from another.** The protocol
+  version (`ProtocolVersion`, the wire `v`) moves *only* on a breaking schema change: a key
+  removed, renamed, retyped, or re-meaning'd. Adding a key is not breaking — consumers
+  ignore unknown keys — so it does not bump `v`. The app's release version
+  (`MetricsPusher.csproj`) moves on any release and says nothing about wire compatibility.
+  `push_metrics.md`'s document version moves on any edit to that file. v1.0.0 of this app
+  speaks the same protocol `1` the originating tray app's v5.12.0 spoke. Spelled out in
+  `push_metrics.md` §3.
 - **Adding a wire field means raising `MaxDatagramBytes` and re-pinning the worst-case
   test in the same change.** The worst case (522) *equals* the ceiling by design; there
   is no slack. Only a total approaching 1024 reopens the receiver contract.

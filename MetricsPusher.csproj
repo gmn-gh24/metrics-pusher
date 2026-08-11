@@ -42,6 +42,12 @@
     <PublishReadyToRun>true</PublishReadyToRun>
     <!-- Code Analysis -->
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <!-- Reproducible release builds. Without this the compiler embeds absolute source
+         paths, so the same commit built from two different directories produces two
+         different binaries. The exe is unsigned, so a byte-identical rebuild is the only
+         way anyone can verify a downloaded MetricsPusher.exe really is this source.
+         Release only: it rewrites source paths, which would break local debugging. -->
+    <ContinuousIntegrationBuild Condition="'$(Configuration)' == 'Release'">true</ContinuousIntegrationBuild>
     <AnalysisLevel>latest</AnalysisLevel>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
     <!-- Supply chain: the lock file pins the whole transitive closure so two machines build

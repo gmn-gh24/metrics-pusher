@@ -46,6 +46,41 @@ Because the .NET runtime is bundled, the file is substantially larger than a
 framework-dependent build; anything near 3 MB means the publish silently fell back to
 framework-dependent and will not run on a machine without the runtime.
 
+## Building from a fresh clone
+
+The repository is self-contained: clone it and the two commands above are all you need. No
+generated file is committed except `packages.lock.json`, which is a build *input* — it pins
+the whole transitive dependency graph so every machine restores identical packages.
+`dotnet restore --locked-mode` verifies the lock file matches the project files and fails
+rather than silently updating them.
+
+The only prerequisite is the **.NET 10 SDK**. Build output (`bin/`, `obj/`, `publish/`) is
+git-ignored and never committed.
+
+## Verifying a download
+
+Release builds are **reproducible**: the same commit built on any machine, from any
+directory, with the same SDK produces a **byte-identical** `MetricsPusher.exe`. This is what
+`ContinuousIntegrationBuild` in the project file buys — without it the compiler embeds
+absolute source paths and two machines produce two different binaries.
+
+Because MetricsPusher is not code-signed, this is the only way to confirm a
+`MetricsPusher.exe` you were given really is built from this source:
+
+```powershell
+git clone https://github.com/gmn-gh24/metrics-pusher.git
+cd metrics-pusher
+git checkout v1.0.0
+dotnet publish MetricsPusher.csproj -c Release -r win-x64 --self-contained -o "publish"
+Get-FileHash publish\MetricsPusher.exe -Algorithm SHA256
+```
+
+Compare that hash against the one published with the release. They must match exactly.
+
+Note that the executable embeds its own commit hash, so **each commit produces a different
+binary** — always check out the exact tag before comparing, and use the hash published
+alongside that release rather than one taken from any other build.
+
 ## Where to install it
 
 **Put the executable somewhere only administrators can write, such as

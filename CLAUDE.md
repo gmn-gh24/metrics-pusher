@@ -22,6 +22,12 @@ dotnet publish MetricsPusher.csproj -c Release -r win-x64 --self-contained -o "p
 Always publish `--self-contained` and use forward slashes in `-o`. A published exe near
 3 MB means the publish silently fell back to framework-dependent.
 
+Release publishes are **reproducible** — `ContinuousIntegrationBuild` is on for Release only
+(it rewrites source paths, which would break local debugging). The same commit built from
+any directory yields a byte-identical exe, which is the only integrity check an unsigned
+binary has. The exe embeds its commit hash, so every commit changes it: a published SHA-256
+is only meaningful against the exact tag it was taken from, and cannot live in this repo.
+
 `PublishSingleFile` / `IncludeNativeLibrariesForSelfExtract` now live in the csproj rather
 than the command line, so restore resolves one package set: passed only on the command
 line, they added `Microsoft.NET.ILLink.Tasks` to `packages.lock.json` on every publish and

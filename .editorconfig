@@ -260,6 +260,18 @@ dotnet_diagnostic.CS8618.severity = warning
 dotnet_diagnostic.CS8625.severity = warning
 
 ###############################
+# Security                    #
+###############################
+
+# CA5392: Use DefaultDllImportSearchPaths attribute for P/Invokes.
+# Off by default, which is why a clean --warnaserror build said nothing about the
+# DLL search-order hijack every bare-name DllImport in this app used to open.
+# Error, not warning: a new P/Invoke without a pinned search path is a way back in.
+# Satisfied by the assembly-level attribute in Program.cs; the libraries named in
+# Services/SystemLibraryResolver.cs are additionally pinned to an absolute System32 path.
+dotnet_diagnostic.CA5392.severity = error
+
+###############################
 # StyleCop Rules              #
 ###############################
 

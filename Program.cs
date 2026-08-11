@@ -1,13 +1,31 @@
+using System.Runtime.InteropServices;
 using System.Security.Principal;
 using MetricsPusher.Services;
+using Microsoft.Win32;
+
+// Second layer of the DLL-hijack defense, behind SystemLibraryResolver: any P/Invoke in
+// this assembly that the resolver does not name still loads from System32 alone, never
+// from the current directory, PATH, or the executable's own folder.
+[assembly: DefaultDllImportSearchPaths(DllImportSearchPath.System32)]
 
 namespace MetricsPusher
 {
     internal static class Program
     {
+        /// <summary>
+        /// <c>HKLM\...\Policies\System\EnableLUA</c>: 0 means UAC is switched off machine-wide,
+        /// which changes what <see cref="IsElevated"/> can tell us. See <see cref="Main"/>.
+        /// </summary>
+        private const string UacPolicyKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System";
+
         [STAThread]
         private static void Main()
         {
+            // FIRST, before any managed code can trigger a native load: pin nvml/pdh/wscapi/
+            // nvapi64 to System32 so a DLL planted beside a portable exe cannot be loaded
+            // into this process. A resolver only governs loads that have not happened yet.
+            SystemLibraryResolver.Install();
+
             // Before any window: sets visual styles, text rendering, and the high-DPI mode
             // that the elevation message box below is drawn with.
             ApplicationConfiguration.Initialize();
@@ -18,9 +36,21 @@ namespace MetricsPusher
             // legitimate, unelevated instance owns.
             if (IsElevated())
             {
-                LoggingService.Warn("Launched elevated - refusing to run");
+                // With UAC ON, holding the Administrators group means genuinely elevated and
+                // "relaunch normally" is actionable. With UAC OFF there is no filtered token
+                // to fall back to, so every process an admin starts looks elevated and that
+                // advice cannot work - say what the situation actually is instead.
+                bool uacOff = IsUacDisabled();
+                LoggingService.Warn(uacOff
+                    ? "Administrators token with UAC disabled - refusing to run"
+                    : "Launched elevated - refusing to run");
+
                 MessageBox.Show(
-                    "MetricsPusher must not be run as administrator.\n\nRelaunch it normally.",
+                    uacOff
+                        ? "MetricsPusher must not run with administrator rights, and UAC is turned "
+                          + "off on this PC - so every program you start has them.\n\nRun it from a "
+                          + "standard user account, or turn User Account Control back on."
+                        : "MetricsPusher must not be run as administrator.\n\nRelaunch it normally.",
                     "MetricsPusher",
                     MessageBoxButtons.OK,
                     MessageBoxIcon.Warning);
@@ -70,6 +100,26 @@ namespace MetricsPusher
         {
             using var identity = WindowsIdentity.GetCurrent();
             return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
+        }
+
+        /// <summary>
+        /// Whether UAC is switched off machine-wide. Only used to word the refusal above:
+        /// the refusal itself does not change, because an unfiltered Administrators token is
+        /// exactly the privilege this app declines to hold either way.
+        /// </summary>
+        /// <returns>True when EnableLUA is present and zero; false when set, missing, or unreadable.</returns>
+        private static bool IsUacDisabled()
+        {
+            try
+            {
+                using RegistryKey? key = Registry.LocalMachine.OpenSubKey(UacPolicyKey);
+                return key?.GetValue("EnableLUA") is int enableLua && enableLua == 0;
+            }
+            catch (Exception ex)
+            {
+                LoggingService.Debug($"Program: Failed to read the UAC policy: {ex.Message}");
+                return false;
+            }
         }
     }
 }

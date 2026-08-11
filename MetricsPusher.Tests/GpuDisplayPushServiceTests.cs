@@ -62,6 +62,51 @@ namespace MetricsPusher.Tests
             Assert.Null(result);
         }
 
+        [Theory]
+        [InlineData("203.0.113.42")]  // TEST-NET-3, a routable-looking public address
+        [InlineData("8.8.8.8")]
+        [InlineData("172.15.0.1")]    // Just below the RFC 1918 /12
+        [InlineData("172.32.0.1")]    // Just above it
+        [InlineData("100.63.0.1")]    // Just below the CGNAT /10
+        [InlineData("100.128.0.1")]   // Just above it
+        [InlineData("192.167.0.1")]   // Adjacent to 192.168/16
+        [InlineData("11.0.0.1")]      // Adjacent to 10/8
+        public void DeriveDisplayAddress_ShouldReturnNull_WhenAddressIsNotOnAPrivateNetwork(string local)
+        {
+            // Arrange - the push is cleartext and unauthenticated and its destination is
+            // derived, not configured. On a public address that would mean streaming this
+            // machine's security posture to a stranger, so no address is derived at all.
+            var localAddress = IPAddress.Parse(local);
+
+            // Act
+            var result = GpuDisplayPushService.DeriveDisplayAddress(localAddress);
+
+            // Assert
+            Assert.Null(result);
+        }
+
+        [Theory]
+        [InlineData("10.0.0.1")]
+        [InlineData("10.255.255.254")]
+        [InlineData("172.16.0.1")]
+        [InlineData("172.31.255.254")]
+        [InlineData("192.168.0.1")]
+        [InlineData("100.64.0.1")]     // CGNAT
+        [InlineData("100.127.255.254")]
+        [InlineData("169.254.10.5")]   // Link-local: no DHCP, but still a real local segment
+        public void DeriveDisplayAddress_ShouldDerive_AcrossEveryPrivateRangeBoundary(string local)
+        {
+            // Arrange
+            var localAddress = IPAddress.Parse(local);
+
+            // Act
+            var result = GpuDisplayPushService.DeriveDisplayAddress(localAddress);
+
+            // Assert
+            Assert.NotNull(result);
+            Assert.Equal(Constants.DisplayHostOctet, result!.GetAddressBytes()[3]);
+        }
+
         [Fact]
         public void BuildPayloadJson_ShouldIncludeAllFields_WhenMetricsComplete()
         {

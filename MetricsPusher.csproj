@@ -2,7 +2,14 @@
 
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <!-- net10.0 is the current LTS (supported to Nov 2028); net8.0 went out of support on
+         10 Nov 2026. This matters more than usual here because every publish is
+         self-contained: the runtime is baked into the exe and gets no Windows Update
+         servicing, so the only patch path for a runtime CVE is rebuilding this project.
+         .NET 10 also stopped adding the executable's directory to the native-library search
+         path in single-file apps, which is a second lock on the same door
+         Services/SystemLibraryResolver.cs closes. -->
+    <TargetFramework>net10.0-windows</TargetFramework>
     <Nullable>enable</Nullable>
     <UseWindowsForms>true</UseWindowsForms>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -30,6 +37,12 @@
     <EnableNETAnalyzers>true</EnableNETAnalyzers>
     <AnalysisLevel>latest</AnalysisLevel>
     <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <!-- Supply chain: the lock file pins the whole transitive closure so two machines build
+         the same bytes, and the audit fails restore on a known-vulnerable package rather
+         than picking it up quietly. Mode "all" covers transitive deps, not just direct. -->
+    <RestorePackagesWithLockFile>true</RestorePackagesWithLockFile>
+    <NuGetAudit>true</NuGetAudit>
+    <NuGetAuditMode>all</NuGetAuditMode>
   </PropertyGroup>
 
   <!-- Every service is internal; the test project reads them directly -->

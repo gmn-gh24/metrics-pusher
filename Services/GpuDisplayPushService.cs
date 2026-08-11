@@ -298,7 +298,8 @@ namespace MetricsPusher.Services
 
         /// <summary>
         /// Replaces the last octet of an IPv4 address with <see cref="Constants.DisplayHostOctet"/>.
-        /// Returns null for null/non-IPv4 input, or when the local address already
+        /// Returns null for null/non-IPv4 input, when the address is not on a private
+        /// network (see <see cref="IsPrivateIPv4"/>), or when the local address already
         /// holds the display octet (the app must never target the PC itself).
         /// </summary>
         internal static IPAddress? DeriveDisplayAddress(IPAddress? localIPv4)
@@ -307,11 +308,44 @@ namespace MetricsPusher.Services
                 return null;
 
             byte[] bytes = localIPv4.GetAddressBytes();
+            if (!IsPrivateIPv4(bytes))
+                return null;
+
             if (bytes[3] == Constants.DisplayHostOctet)
                 return null;
 
             bytes[3] = (byte)Constants.DisplayHostOctet;
             return new IPAddress(bytes);
+        }
+
+        /// <summary>
+        /// Whether an IPv4 address is on a network the "trusted local subnet" premise in
+        /// push_metrics.md section 10 can actually be made about: RFC 1918 private space,
+        /// RFC 6598 carrier-grade NAT, or RFC 3927 link-local.
+        /// <para>
+        /// The push is cleartext and unauthenticated by design, and the destination is
+        /// DERIVED rather than configured - so without this check a PC holding a routable
+        /// public IPv4 (a bridged modem, some hosting and VM setups) would push its host
+        /// name, hardware, uptime and its antivirus/firewall/pending-reboot posture to a
+        /// stranger's machine on the internet, once per second, all session. That is not an
+        /// instance of the accepted LAN trade-off; it is the premise silently not holding.
+        /// Refusing to derive an address is the same outcome as having no network yet, which
+        /// the discovery loop already handles.
+        /// </para>
+        /// </summary>
+        /// <param name="bytes">The four octets of an IPv4 address, in network order.</param>
+        /// <returns>True when the address belongs to a private or link-local range.</returns>
+        internal static bool IsPrivateIPv4(byte[] bytes)
+        {
+            return bytes switch
+            {
+                [10, _, _, _] => true,                       // 10.0.0.0/8
+                [172, >= 16 and <= 31, _, _] => true,        // 172.16.0.0/12
+                [192, 168, _, _] => true,                    // 192.168.0.0/16
+                [100, >= 64 and <= 127, _, _] => true,       // 100.64.0.0/10 (CGNAT)
+                [169, 254, _, _] => true,                    // 169.254.0.0/16 (link-local)
+                _ => false,
+            };
         }
 
         /// <summary>

@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
+  <!-- Version here is cosmetic; the real version comes from the csproj -->
+  <assemblyIdentity version="1.0.0.0" name="MetricsPusher"/>
+
+  <!-- The passive half of the no-admin rule. Declaring asInvoker explicitly suppresses
+       Windows' installer-detection heuristic, which can otherwise offer to elevate an
+       unmanifested executable. The active half - refusing to run when already elevated -
+       is in Program.Main. -->
+  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
+    <security>
+      <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
+        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+      </requestedPrivileges>
+    </security>
+  </trustInfo>
+
+  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
+    <application>
+      <!-- Windows 10/11 (only OS supported by .NET 8) -->
+      <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
+    </application>
+  </compatibility>
+</assembly>

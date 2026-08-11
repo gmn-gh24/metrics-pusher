@@ -1,0 +1,64 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+    <ApplicationHighDpiMode>PerMonitorV2</ApplicationHighDpiMode>
+    <Version>1.0.0</Version>
+    <FileVersion>1.0.0</FileVersion>
+    <AssemblyVersion>1.0.0</AssemblyVersion>
+    <!-- Keep win-x64 in the restore graph so plain builds and self-contained publishes
+         resolve the same package set (prevents churn between the two commands) -->
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <!-- NVAPI and NVML are 64-bit only; pinning the platform target means even an
+         AnyCPU-configured build produces a 64-bit assembly. -->
+    <Platforms>AnyCPU;x64</Platforms>
+    <PlatformTarget>x64</PlatformTarget>
+    <!-- Runtime knobs: this app allocates roughly one small payload per second and
+         gains nothing from the background GC thread; R2R removes JIT work at startup.
+         Property names are ConcurrentGarbageCollection / ServerGarbageCollection (not
+         ...Collector) - MSBuild ignores unknown properties silently, so verify the
+         emitted System.GC.* keys in the published MetricsPusher.runtimeconfig.json. -->
+    <ConcurrentGarbageCollection>false</ConcurrentGarbageCollection>
+    <ServerGarbageCollection>false</ServerGarbageCollection>
+    <PublishReadyToRun>true</PublishReadyToRun>
+    <!-- Code Analysis -->
+    <EnableNETAnalyzers>true</EnableNETAnalyzers>
+    <AnalysisLevel>latest</AnalysisLevel>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+  </PropertyGroup>
+
+  <!-- Every service is internal; the test project reads them directly -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="MetricsPusher.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\trayicon.ico" />
+  </ItemGroup>
+
+  <!-- Exclude the test project subfolder from compilation -->
+  <ItemGroup>
+    <Compile Remove="MetricsPusher.Tests\**" />
+    <Content Remove="MetricsPusher.Tests\**" />
+    <EmbeddedResource Remove="MetricsPusher.Tests\**" />
+    <None Remove="MetricsPusher.Tests\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="NvAPIWrapper.Net" Version="0.8.1.101" />
+    <PackageReference Include="Roslynator.Analyzers" Version="4.12.9">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+    <PackageReference Include="StyleCop.Analyzers" Version="1.1.118">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

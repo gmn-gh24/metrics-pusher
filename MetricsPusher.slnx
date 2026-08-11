@@ -1,0 +1,11 @@
+<Solution>
+  <Project Path="MetricsPusher.csproj" />
+  <Project Path="MetricsPusher.Tests/MetricsPusher.Tests.csproj" />
+  <Properties>
+    <Property Name="StartupProject" Value="MetricsPusher.csproj" />
+  </Properties>
+  <Configurations>
+    <Platform Name="Any CPU" />
+    <Platform Name="x64" />
+  </Configurations>
+</Solution>

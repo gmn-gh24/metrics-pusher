@@ -99,18 +99,22 @@ Logs: `%LOCALAPPDATA%\MetricsPusher\logs\app.log` (10 MB, rotates to `.1`–`.3`
   and gets no Windows Update servicing — the only patch path for a runtime CVE is
   rebuilding this project. net8.0 went out of support on 10 Nov 2026.
 - **The SDK is pinned to an exact version in `global.json`, `rollForward: disable`.**
-  Currently 10.0.302. This is not fussiness: `Microsoft.NET.ILLink.Tasks` tracks the
-  runtime patch its SDK bundles, so *any* other SDK — including a patch bump inside the
-  same 3xx feature band — resolves a different version, rewrites `packages.lock.json` on
-  every build and publish, and fails `--locked-mode`. It also changes the runtime baked
-  into the self-contained exe, which silently breaks the byte-identical-rebuild property
-  that is the only integrity check an unsigned binary has. `latestPatch` and `feature`
-  both reopen that; only `disable` closes it. A machine without exactly this SDK fails
-  fast with "install it or update global.json", which is the intended behaviour — the
-  alternative is a build that succeeds and quietly ships different bytes. **Moving to a
-  new SDK is a deliberate change:** bump `global.json`, re-run
-  `dotnet restore --force-evaluate`, and commit the resulting lock file in the same
-  change.
+  Currently 10.0.400, which bundles runtime 10.0.11. This is not fussiness:
+  `Microsoft.NET.ILLink.Tasks` tracks the runtime patch its SDK bundles, so an SDK with a
+  different bundled runtime resolves a different version, rewrites `packages.lock.json` on
+  every build and publish, and fails `--locked-mode`. The mapping is not per feature band —
+  10.0.400, 10.0.303 and 10.0.111 all bundle 10.0.11 and resolve identically, while
+  10.0.302 bundles 10.0.10 and does not — so "same band" is not a safe proxy for "same
+  package set". The bundled runtime is also what gets baked into the self-contained exe,
+  so an SDK change silently breaks the byte-identical-rebuild property that is the only
+  integrity check an unsigned binary has. `latestPatch`, `feature` and `latestFeature` all
+  reopen that; only `disable` closes it. A machine without exactly this SDK fails fast with
+  "install it or update global.json", which is the intended behaviour — the alternative is
+  a build that succeeds and quietly ships different bytes. **Moving to a new SDK is a
+  deliberate change:** bump `global.json`, re-run `dotnet restore --force-evaluate`, and
+  commit the resulting lock file in the same change. This pin exists because two dev
+  environments one SDK release apart produced two different lock files; keep every
+  environment on the pinned version rather than loosening the policy.
 
 ## Invariants worth knowing before you change anything
 

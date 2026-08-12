@@ -179,6 +179,11 @@ commit-and-push request, review the diff, stage only the files asked for, then p
 branch to its configured remote. Commit subjects are short, imperative, sentence-case. Tests are
 `<TypeName>Tests.cs` / `Member_ShouldExpectedBehavior_WhenCondition`.
 
+Pass a multi-line commit message as `git commit -F -` with a heredoc matching the shell you are
+actually in — a PowerShell here-string (`@'…'@`) sent through the Bash tool puts a literal `@` on
+line 1, which becomes the subject and reads as a normal commit until someone looks. Confirm with
+`git log -1 --format=%s`.
+
 Sensor cross-checks against HWiNFO64 and CrystalDiskInfo are **not** to be run: the user
 declined those tools, so do not install or suggest them. `WHATSLEFT.md` marks those items
 skipped rather than outstanding.

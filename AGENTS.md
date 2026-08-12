@@ -32,6 +32,8 @@ History uses short, imperative, sentence-case subjects such as `Harden runtime s
 
 Use Git for Windows and standard `git` commands. Do not require or invoke GitHub CLI (`gh`). For explicit commit-and-push requests, inspect the diff, stage only requested files, commit, and push the current branch to its configured remote.
 
+Write a multi-line commit message with `git commit -F -` and a shell heredoc (`<<'EOF' … EOF`), or `-F <file>`. This box has two shells and their quoting does not mix: a PowerShell here-string (`@'…'@`) passed to a POSIX shell sends the literal `@` through as the first line, silently making it the subject. Match the syntax to the shell actually running the command, and check `git log -1 --format=%s` after committing.
+
 ## Security & Configuration Tips
 
 Never enable PawnIO's unrestricted mode or replace bundled binaries without verifying provenance, hashes, licensing, and updating `README.md`. Pin new P/Invoke libraries through `SystemLibraryResolver`; do not weaken private-network destination checks. Never commit secrets or local `.env` files.

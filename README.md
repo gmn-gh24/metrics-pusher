@@ -159,9 +159,10 @@ Not verified, and stated plainly rather than implied:
 
 - **The entire AMD path.** No AMD hardware was available, so the AMD module, the Tctl/Tdie
   decode and the PCI-mutex handling around it have never been exercised.
-- **The silent install.** PawnIO was installed interactively during development, so the
-  `-install -silent` exit code was never observed, and neither was whether a clean install
-  asks for a restart.
+- **The silent install exit code.** PawnIO was installed interactively during development,
+  so the `-install -silent` exit code was never observed. A clean 2.2.0 install on Windows
+  11 did **not** ask for a restart, so the reboot-required path is not one a normal first
+  install is expected to take — but the code still handles it, untested.
 - The application has not been run end to end on that machine with these changes.
 
 ## Is .NET required?

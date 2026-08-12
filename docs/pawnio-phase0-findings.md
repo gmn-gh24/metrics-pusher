@@ -161,14 +161,23 @@ view answers here, so **a bug in the second lookup would not be caught on this d
 Anyone testing the probe should force the WOW6432Node branch deliberately rather than trust
 a green run.
 
-**Not measured — the silent-install exit code.** Because the install was interactive, the
-`-install -silent` exit code was never observed, and neither was whether a clean Windows 11
-install returns `0` or `3010` (`ERROR_SUCCESS_REBOOT_REQUIRED`). Plan §2.4 flagged this as
-"determine empirically"; it remains **UNVERIFIED**. Consequence: §3.6's three-way exit-code
-handling (`0` / `3010` / other) is written against the **documented** contract from the
-2.2.0 release notes ("in silent mode `ERROR_SUCCESS_REBOOT_REQUIRED` is appropriately
-returned if a restart is needed"), not against an observation. That is an honest gap and it
-must not be papered over: nothing here confirms which branch a real first install takes.
+**Partly measured — the reboot question is answered, the exit code is not.**
+
+*Measured:* a clean install of PawnIO 2.2.0 on this Windows 11 box (build 26200) did **not
+require a restart**. The driver was live and the device openable in the same session, which
+the IOCTL spike in §5 then proved by talking to it. Plan §2.4 asked whether a clean install
+returns `3010`; on the evidence, a normal first install has no reason to, because no restart
+is pending. That materially de-risks §3.6's UX — the reboot path is an edge case, not the
+common one.
+
+*Still UNVERIFIED:* the numeric exit code from `-install -silent`. The install was performed
+interactively through the GUI, so no exit code was ever observed. Consequence: §3.6's
+three-way handling (`0` / `3010` / other) is written against the **documented** contract from
+the 2.2.0 release notes ("in silent mode `ERROR_SUCCESS_REBOOT_REQUIRED` is appropriately
+returned if a restart is needed"), not against an observation. Do not paper over this: we
+know a restart was not needed, we do not know what the silent path *returns*. The mitigation
+is that anything unrecognised falls into the default arm and degrades safely, so a wrong
+guess costs the reboot notice rather than correctness.
 
 ---
 

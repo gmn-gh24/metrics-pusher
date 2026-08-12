@@ -10,13 +10,6 @@ namespace MetricsPusher
     /// </summary>
     internal sealed class TrayApplicationContext : ApplicationContext
     {
-        /// <summary>
-        /// How many times to re-check for a GPU after <see cref="GpuMonitorService.Initialize"/>
-        /// returned without finding one. See <see cref="InitializeAndStartPushAsync"/>.
-        /// </summary>
-        private const int LateGpuDetectionAttempts = 24;
-
-        private static readonly TimeSpan LateGpuDetectionInterval = TimeSpan.FromSeconds(5);
         private static readonly Assembly ExecutingAssembly = Assembly.GetExecutingAssembly();
 
         private readonly NotifyIcon _notifyIcon;
@@ -47,7 +40,13 @@ namespace MetricsPusher
             // CTS is disposed (app exit during init), while reading _pushCts.Token inside
             // the lambda would throw ObjectDisposedException.
             CancellationToken pushToken = _pushCts.Token;
-            _ = Task.Run(() => InitializeAndStartPushAsync(pushToken));
+
+            // The GPU probe and the push loop start together, and neither gates the other.
+            // A machine with no NVIDIA GPU still pushes its CPU/RAM/disk/network/OS metrics:
+            // absent sensors are omitted from the datagram rather than zeroed, so the
+            // consumer reads "unknown" for the gpu* keys and renders the rest.
+            _ = Task.Run(ProbeGpuInBackground);
+            _ = Task.Run(() => StartPushOnce(pushToken));
         }
 
         private static Icon LoadTrayIcon()
@@ -59,46 +58,22 @@ namespace MetricsPusher
         }
 
         /// <summary>
-        /// Probes for a GPU and starts the push loop once one is found.
+        /// Probes for an NVIDIA GPU, off the push loop and without gating it.
         /// <para>
-        /// <see cref="GpuMonitorService.Initialize"/> waits at most 30 seconds for the NVAPI
-        /// probe, but on timeout the probe task keeps running and can report a GPU AFTER
-        /// Initialize has already returned. Something has to notice that late answer or the
-        /// app silently never pushes on a slow-probing machine; this poll is that something.
+        /// <see cref="GpuMonitorService.Initialize"/> blocks for up to 30 seconds, and on
+        /// timeout the probe task keeps running and can report a GPU later still. Nothing
+        /// needs to watch for that late answer: <see cref="GpuMonitorService.GetGpuMetrics"/>
+        /// re-reads the probe's result on every tick, so the gpu* fields simply begin
+        /// appearing in the datagram on the first tick after the probe succeeds. The
+        /// converse is the point of running this off the loop - a machine that never finds
+        /// a GPU pushes every other metric anyway.
         /// </para>
         /// </summary>
-        /// <param name="token">Cancelled when the app exits.</param>
-        private async Task InitializeAndStartPushAsync(CancellationToken token)
+        private static void ProbeGpuInBackground()
         {
             try
             {
                 GpuMonitorService.Initialize();
-
-                if (GpuMonitorService.IsGpuAvailable)
-                {
-                    StartPushOnce(token);
-                    return;
-                }
-
-                using var timer = new PeriodicTimer(LateGpuDetectionInterval);
-                for (int attempt = 0; attempt < LateGpuDetectionAttempts; attempt++)
-                {
-                    if (!await timer.WaitForNextTickAsync(token).ConfigureAwait(false))
-                        return;
-
-                    if (GpuMonitorService.IsGpuAvailable)
-                    {
-                        LoggingService.Info("NVIDIA GPU detected after the startup probe timed out");
-                        StartPushOnce(token);
-                        return;
-                    }
-                }
-
-                LoggingService.Info("No NVIDIA GPU detected - metrics push disabled for this session");
-            }
-            catch (OperationCanceledException)
-            {
-                // App exit during init - silently stop
             }
             catch (Exception ex)
             {
@@ -107,7 +82,9 @@ namespace MetricsPusher
         }
 
         /// <summary>
-        /// Starts the metrics push loop exactly once per session.
+        /// Starts the metrics push loop exactly once per session. The gate is kept even
+        /// though one call site remains: it states the invariant rather than relying on
+        /// there never being a second caller.
         /// </summary>
         /// <param name="token">Cancelled when the app exits.</param>
         private void StartPushOnce(CancellationToken token)

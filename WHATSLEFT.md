@@ -1,10 +1,35 @@
-# What's left — network metrics (v1.0.1)
+# What's left — network metrics (v1.0.1), GPU-less operation (v1.0.2)
 
 Validation the dev box cannot do. The dev box is a desktop on wired 5GbE Realtek
-(`netType` 0, `netLink` 5000), always awake, single physical NIC — so the following
-paths shipped tested by unit fixtures and reasoning, not by hardware.
+(`netType` 0, `netLink` 5000), always awake, single physical NIC, **with an RTX 3090 Ti** —
+so the following paths shipped tested by unit fixtures and reasoning, not by hardware.
 
-## Outstanding
+## Outstanding — GPU-less operation (v1.0.2)
+
+Removing the NVIDIA gate added a branch this box cannot reach: it always finds a GPU. The
+unit test pins the payload shape (every `gpu*` key absent, everything else present), but no
+datagram from a GPU-less machine has been observed live.
+
+- **A machine with no NVIDIA GPU.** The whole point of the change. Expected: the loop starts,
+  discovery runs as usual, and every datagram carries `cpu*`/`nvme*`/`net*`/`ram*`/`disk*`/OS
+  fields with no `gpu*` key all session. Worth watching specifically that the **CPU and NVMe
+  sensors initialize at all** there — before v1.0.2 they were never constructed on such a
+  machine, so PawnIO module loading and the NVMe IOCTL path have only ever run on boxes that
+  also had a GPU. `Program.cs` already prompted for the PawnIO install on those machines and
+  then never used it; that install is live for the first time as of v1.0.2.
+- **How the display renders a permanently GPU-less sender.** Protocol-wise this is just §5
+  absence, and the reference consumer's rule is "absent ⇒ keep last-good / render unknown".
+  Untested is what the panel actually looks like when the GPU region never populates.
+- **The startup race on a machine that does have a GPU.** The probe no longer gates the loop,
+  so the first datagram can precede it and ship without `gpu*` keys, with the keys appearing
+  a tick or two later. Needs a capture against a display that answers the first discovery
+  ping; expected to be invisible to a consumer that keeps last-good, but never observed.
+- **Mid-session GPU loss.** §7.1 previously claimed a sender goes fully silent when GPU
+  monitoring drops; the suppression guard stopped doing that once the CPU/NVMe/network fields
+  joined the live set, and §7.1 now says so. Confirm with a driver restart: expected is the
+  `gpu*` keys dropping out (two datagrams) while everything else keeps arriving at 1 Hz.
+
+## Outstanding — network metrics
 
 - **A Wi-Fi adapter.** `netType` = 1 has never been produced by a real read (only by the
   mapping test), and `netLink` has only ever been observed static — a Wi-Fi link that

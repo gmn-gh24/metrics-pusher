@@ -268,11 +268,11 @@ namespace MetricsPusher.Services
                 // free-running accumulator, not a wattage, so a first sample has to exist
                 // before a second one can be a rate.
                 //
-                // Coupling worth knowing: this loop only runs once an NVIDIA GPU is found
-                // and a display has answered discovery, so on a machine with neither, none
-                // of these sensors is ever initialized. That is the design (plan section
-                // 3.5) rather than an oversight - they exist to fill fields in this
-                // datagram, and there is no datagram without a GPU.
+                // Coupling worth knowing: a display answering discovery is the only thing
+                // these sensors wait on. A GPU is NOT one of them - the loop runs on a
+                // machine with no NVIDIA GPU at all, filling the cpu*/nvme*/net*/ram/disk
+                // fields while the gpu* keys stay absent. What still gates them is having
+                // somewhere to send: no display, no loop, so none of them initializes.
                 cpuSensors = new CpuTemperatureService();
                 diskSensor = new NvmeTemperatureService();
                 _ = cpuSensors.Initialize();

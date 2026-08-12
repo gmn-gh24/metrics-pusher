@@ -159,15 +159,20 @@ Logs: `%LOCALAPPDATA%\MetricsPusher\logs\app.log` (10 MB, rotates to `.1`–`.3`
   at the 1 Hz sweep rate forever on a persistently broken sensor. The collapse applies the
   codebase's "one line per failure streak" rule to every call site at once — do not remove
   it in favour of trusting each call site to remember.
-- **The push loop starts once per session**, gated by an `Interlocked` exchange. It starts
-  when a GPU is detected — either by `GpuMonitorService.Initialize` (which waits up to
-  30 s) or by the 5 s poll in `InitializeAndStartPushAsync` that covers a probe outlasting
-  that wait. Do not remove that poll: with no menu timer, nothing else notices a late GPU.
-- **The CPU and disk sensors live on the push loop, so no GPU means no sensors.** They are
-  constructed and initialized inside `RunAsync`, which only runs once an NVIDIA GPU is found
-  *and* a display has answered discovery; on a machine with neither, they never initialize.
-  That is the design — they exist to fill fields in this datagram, and there is no datagram
-  without a GPU — not a bug to be routed around with a second timer.
+- **A GPU is not required to push.** The loop starts once per session, gated by an
+  `Interlocked` exchange, and starts *unconditionally* — `ProbeGpuInBackground` and
+  `StartPushOnce` are launched side by side and neither waits on the other. A GPU-less
+  machine still sends its CPU/RAM/disk/network/OS fields; the `gpu*` keys are simply absent,
+  which `push_metrics.md` §5 already defines as "unknown", never zero. Do not reintroduce a
+  late-GPU poll: `GetGpuMetrics` re-reads the probe's result every tick, so a GPU that
+  latches after the 30 s `Initialize` timeout starts filling fields on the next tick by
+  itself. The flip side is that on a GPU machine the first datagram can precede the probe
+  and carry no `gpu*` keys — in-contract (§5 lists them per-tick, self-healing), and the
+  price of not blocking a GPU-less box behind a 30 s wait.
+- **The CPU, disk and network sensors live on the push loop, so no display means no
+  sensors.** They are constructed and initialized inside `RunAsync`, which runs only once a
+  display has answered discovery — that gate stays, since there is nowhere to send without
+  one. A GPU is *not* part of it. Do not route around the display gate with a second timer.
 - **Refreshing the PawnIO assets is one atomic task.** `Resources/PawnIo/IntelMSR.bin`,
   `Resources/PawnIo/AMDFamily17.bin` and `Resources/PawnIo/COPYING` come from one module
   release and move together with `Resources/PawnIO_setup.exe`; the SHA-256 table in

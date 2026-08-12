@@ -36,9 +36,10 @@ namespace MetricsPusher.Services
     /// <para>
     /// <b>No new thread and no new timer.</b> Everything runs on the existing 1 Hz push
     /// tick, next to <c>SystemMetricsService.GetSystemMetrics</c>. A consequence worth
-    /// knowing: the push loop only starts once an NVIDIA GPU is found, so on a machine
-    /// without one none of this is ever constructed - see the comment beside the
-    /// construction in <c>GpuDisplayPushService.RunAsync</c>.
+    /// knowing: the push loop starts once a display answers discovery - a GPU is not
+    /// required - so this runs on GPU-less machines too, but never on a machine where
+    /// no display was found. See the comment beside the construction in
+    /// <c>GpuDisplayPushService.RunAsync</c>.
     /// </para>
     /// <para>
     /// Thread-safety: a private lock, like <see cref="NvmeTemperatureService"/> and unlike

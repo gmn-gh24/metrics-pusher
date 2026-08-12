@@ -160,6 +160,70 @@ namespace MetricsPusher.Tests
         }
 
         [Fact]
+        public void BuildPayloadJson_ShouldOmitEveryGpuFieldButStillSend_WhenNoGpuIsPresent()
+        {
+            // Arrange - a machine with no NVIDIA GPU. An empty GpuMetrics is exactly what
+            // GetGpuMetrics returns there, while every non-GPU sensor reports normally.
+            var systemMetrics = new SystemMetrics
+            {
+                CpuName = "Intel Core i9-14900K",
+                CpuUsagePercent = 31,
+                CpuTemperature = 71.5f,
+                CpuTemperatureSource = CpuTemperatureSource.IntelPackageMsr,
+                CpuPowerWatts = 125,
+                CpuPowerLimitWatts = 253,
+                NvmeTemperature = 42.5f,
+                RamUsedMB = 18432,
+                RamTotalMB = 65536,
+                DiskFreeGB = 512,
+                DiskTotalGB = 1863,
+                NetName = "Intel Ethernet Controller I225-V",
+                NetMediaType = 0,
+                NetLinkMbps = 2500,
+                NetRxKbps = 94210,
+                NetTxKbps = 1180,
+                WindowsVersion = "11 23H2",
+                AntivirusHealth = 0,
+                RebootPending = 0,
+                FirewallEnabled = 1,
+                UptimeSeconds = 345600,
+            };
+
+            // Act
+            var json = GpuDisplayPushService.BuildPayloadJson(new GpuMetrics(), systemMetrics, "TEST-HOST-001");
+
+            // Assert - a datagram is still built: the live-metric guard counts CPU, NVMe,
+            // network, RAM and disk, so a GPU is not what makes a payload worth sending.
+            Assert.NotNull(json);
+
+            using var document = JsonDocument.Parse(json!);
+            JsonElement root = document.RootElement;
+
+            Assert.Equal(GpuDisplayPushService.ProtocolVersion, root.GetProperty("v").GetInt32());
+            Assert.Equal("TEST-HOST-001", root.GetProperty("host").GetString());
+            Assert.Equal(31, root.GetProperty("cpuLoad").GetInt32());
+            Assert.Equal(71.5f, root.GetProperty("cpuTemp").GetSingle());
+            Assert.Equal(42.5f, root.GetProperty("nvmeTemp").GetSingle());
+            Assert.Equal(18432, root.GetProperty("ramUsed").GetInt64());
+            Assert.Equal(94210, root.GetProperty("netRx").GetInt64());
+            Assert.Equal(345600, root.GetProperty("up").GetInt64());
+
+            // Key lookup, never substring matching: "load" is a substring of "cpuLoad" and
+            // "temp" of "cpuTemp", so asserting over the JSON text would pass while
+            // asserting nothing at all.
+            string[] gpuKeys =
+            {
+                "gpu", "temp", "load", "vramUsed", "vramTotal", "fan",
+                "power", "watts", "limitW", "clock", "vramClock",
+            };
+
+            foreach (string key in gpuKeys)
+            {
+                Assert.False(root.TryGetProperty(key, out _), $"no GPU means no \"{key}\" key on the wire");
+            }
+        }
+
+        [Fact]
         public void BuildPayloadJson_ShouldOmitNullFields_WhenSomeMetricsMissing()
         {
             // Arrange - fan, VRAM, CPU usage and disk unavailable this tick

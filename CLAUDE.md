@@ -98,6 +98,19 @@ Logs: `%LOCALAPPDATA%\MetricsPusher\logs\app.log` (10 MB, rotates to `.1`–`.3`
 - **.NET 10 (LTS).** Every publish is self-contained, so the runtime ships inside the exe
   and gets no Windows Update servicing — the only patch path for a runtime CVE is
   rebuilding this project. net8.0 went out of support on 10 Nov 2026.
+- **The SDK is pinned to an exact version in `global.json`, `rollForward: disable`.**
+  Currently 10.0.302. This is not fussiness: `Microsoft.NET.ILLink.Tasks` tracks the
+  runtime patch its SDK bundles, so *any* other SDK — including a patch bump inside the
+  same 3xx feature band — resolves a different version, rewrites `packages.lock.json` on
+  every build and publish, and fails `--locked-mode`. It also changes the runtime baked
+  into the self-contained exe, which silently breaks the byte-identical-rebuild property
+  that is the only integrity check an unsigned binary has. `latestPatch` and `feature`
+  both reopen that; only `disable` closes it. A machine without exactly this SDK fails
+  fast with "install it or update global.json", which is the intended behaviour — the
+  alternative is a build that succeeds and quietly ships different bytes. **Moving to a
+  new SDK is a deliberate change:** bump `global.json`, re-run
+  `dotnet restore --force-evaluate`, and commit the resulting lock file in the same
+  change.
 
 ## Invariants worth knowing before you change anything
 

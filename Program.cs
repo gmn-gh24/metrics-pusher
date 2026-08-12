@@ -1,7 +1,5 @@
 using System.Runtime.InteropServices;
-using System.Security.Principal;
 using MetricsPusher.Services;
-using Microsoft.Win32;
 
 // Second layer of the DLL-hijack defense, behind SystemLibraryResolver: any P/Invoke in
 // this assembly that the resolver does not name still loads from System32 alone, never
@@ -12,12 +10,6 @@ namespace MetricsPusher
 {
     internal static class Program
     {
-        /// <summary>
-        /// <c>HKLM\...\Policies\System\EnableLUA</c>: 0 means UAC is switched off machine-wide,
-        /// which changes what <see cref="IsElevated"/> can tell us. See <see cref="Main"/>.
-        /// </summary>
-        private const string UacPolicyKey = @"SOFTWARE\Microsoft\Windows\CurrentVersion\Policies\System";
-
         [STAThread]
         private static void Main()
         {
@@ -26,36 +18,10 @@ namespace MetricsPusher
             // into this process. A resolver only governs loads that have not happened yet.
             SystemLibraryResolver.Install();
 
-            // Before any window: sets visual styles, text rendering, and the high-DPI mode
-            // that the elevation message box below is drawn with.
+            // Before anything draws: sets visual styles, text rendering and the high-DPI mode
+            // used by the tray UI and by the PawnIO install prompt, which is the first thing
+            // that can put a window on screen.
             ApplicationConfiguration.Initialize();
-
-            // The active half of the no-admin rule (app.manifest holds the passive half).
-            // Checked BEFORE the mutex on purpose: an elevated launch must leave nothing
-            // behind, least of all a handle on the single-instance mutex that the
-            // legitimate, unelevated instance owns.
-            if (IsElevated())
-            {
-                // With UAC ON, holding the Administrators group means genuinely elevated and
-                // "relaunch normally" is actionable. With UAC OFF there is no filtered token
-                // to fall back to, so every process an admin starts looks elevated and that
-                // advice cannot work - say what the situation actually is instead.
-                bool uacOff = IsUacDisabled();
-                LoggingService.Warn(uacOff
-                    ? "Administrators token with UAC disabled - refusing to run"
-                    : "Launched elevated - refusing to run");
-
-                MessageBox.Show(
-                    uacOff
-                        ? "MetricsPusher must not run with administrator rights, and UAC is turned "
-                          + "off on this PC - so every program you start has them.\n\nRun it from a "
-                          + "standard user account, or turn User Account Control back on."
-                        : "MetricsPusher must not be run as administrator.\n\nRelaunch it normally.",
-                    "MetricsPusher",
-                    MessageBoxButtons.OK,
-                    MessageBoxIcon.Warning);
-                return;
-            }
 
             // Single-instance guard: the mutex is held for the app's lifetime and
             // released at process exit. If a previous instance crashed, the OS destroys
@@ -66,6 +32,13 @@ namespace MetricsPusher
                 LoggingService.Info("Another instance is already running - exiting");
                 return;
             }
+
+            // First-run consent prompt for the PawnIO kernel driver, which is the only route
+            // to CPU die temperature. After the mutex so only the one live instance can put
+            // that prompt on screen, and before the tray UI so the driver is already present
+            // by the time TrayApplicationContext starts the push loop. Never throws - the
+            // safety net below is not wired yet.
+            PawnIoInstaller.EnsureInstalled();
 
             // Global exception safety net: without these, a UI-thread exception shows the
             // default WinForms crash dialog and background-thread exceptions kill the process,
@@ -84,56 +57,6 @@ namespace MetricsPusher
             };
 
             Application.Run(new TrayApplicationContext());
-        }
-
-        /// <summary>
-        /// Whether this process is running elevated.
-        /// <para>
-        /// <c>IsInRole(Administrator)</c> is the right predicate here rather than "is the
-        /// user an admin": an admin user running normally holds a FILTERED token, for which
-        /// this returns false. It returns true only under actual elevation - exactly the
-        /// case to refuse.
-        /// </para>
-        /// </summary>
-        /// <returns>True when the process token carries the Administrators group.</returns>
-        private static bool IsElevated()
-        {
-            using var identity = WindowsIdentity.GetCurrent();
-            return new WindowsPrincipal(identity).IsInRole(WindowsBuiltInRole.Administrator);
-        }
-
-        /// <summary>
-        /// Whether UAC is switched off machine-wide. Only used to word the refusal above:
-        /// the refusal itself does not change, because an unfiltered Administrators token is
-        /// exactly the privilege this app declines to hold either way.
-        /// </summary>
-        /// <returns>True when EnableLUA is present and zero; false when set, missing, or unreadable.</returns>
-        private static bool IsUacDisabled()
-        {
-            try
-            {
-                using RegistryKey? key = Registry.LocalMachine.OpenSubKey(UacPolicyKey);
-                return IsUacDisabledValue(key?.GetValue("EnableLUA"));
-            }
-            catch (Exception ex)
-            {
-                LoggingService.Debug($"Program: Failed to read the UAC policy: {ex.Message}");
-                return false;
-            }
-        }
-
-        /// <summary>
-        /// The verdict on a raw <c>EnableLUA</c> registry value, split out from the read so it
-        /// can be pinned by tests: only an explicit zero means UAC is off. Anything else -
-        /// value set to 1, value absent, key absent, or a type the policy is not supposed to
-        /// have - is read as "UAC is on", which is the answer that keeps the refusal message
-        /// actionable when we cannot prove otherwise.
-        /// </summary>
-        /// <param name="enableLua">The value read from the policy key, or null when absent.</param>
-        /// <returns>True only for an integer zero.</returns>
-        internal static bool IsUacDisabledValue(object? enableLua)
-        {
-            return enableLua is int value && value == 0;
         }
     }
 }

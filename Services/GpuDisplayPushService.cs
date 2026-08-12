@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
 using System.Text.Json;
@@ -164,6 +164,19 @@ namespace MetricsPusher.Services
         private const int OsHealthRefreshTicks = 60;
 
         /// <summary>
+        /// The push loop writes one Debug line with the CPU and disk sensor readings every
+        /// this many ticks (~1 minute at 1 Hz) - the same counter idiom as
+        /// <see cref="OsHealthRefreshTicks"/>, on the existing timer, not a second
+        /// mechanism.
+        /// <para>
+        /// It exists because none of those readings is on the wire yet, so without this line
+        /// there is no way to tell a working sensor from a silent one short of a debugger.
+        /// One formatted string per minute is the whole cost.
+        /// </para>
+        /// </summary>
+        private const int SensorLogTicks = 60;
+
+        /// <summary>
         /// SIO_UDP_CONNRESET: stops Windows from surfacing ICMP port-unreachable
         /// (display powered off) as SocketException on subsequent sends.
         /// Input is a 4-byte BOOL; 0 = disable the reset behavior.
@@ -182,6 +195,15 @@ namespace MetricsPusher.Services
         {
             UdpClient? client = null;
 
+            // Owned by this loop, and disposed in the finally beside the socket. They are
+            // NOT held by SystemMetricsService, which is static: a static instance field
+            // there would be process-global mutable state shared by every test that touches
+            // GetSystemMetrics, which is the exact problem MetricsPusher.Tests'
+            // ProcessGlobalCollection exists to work around. Here their lifetime is the push
+            // loop's, which is also the only thing that reads them.
+            CpuTemperatureService? cpuSensors = null;
+            NvmeTemperatureService? diskSensor = null;
+
             try
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -199,6 +221,24 @@ namespace MetricsPusher.Services
                 // So the first timer tick, ~1 second from now, already carries CPU usage
                 SystemMetricsService.PrimeCpuCounter();
 
+                // The CPU and disk sensors start here for the same reason, and pay the same
+                // kind of one-time cost off the tick: a CreateFile, a PawnIO module load and
+                // a handful of init reads for the CPU, two CreateFiles and a tier probe for
+                // the disk. Prime() is the energy counter's PrimeCpuCounter - RAPL exposes a
+                // free-running accumulator, not a wattage, so a first sample has to exist
+                // before a second one can be a rate.
+                //
+                // Coupling worth knowing: this loop only runs once an NVIDIA GPU is found
+                // and a display has answered discovery, so on a machine with neither, none
+                // of these sensors is ever initialized. That is the design (plan section
+                // 3.5) rather than an oversight - they exist to fill fields in this
+                // datagram, and there is no datagram without a GPU.
+                cpuSensors = new CpuTemperatureService();
+                diskSensor = new NvmeTemperatureService();
+                _ = cpuSensors.Initialize();
+                _ = diskSensor.Initialize();
+                cpuSensors.Prime();
+
                 // And usually the OS-health values too (refreshed once a minute below;
                 // queued off-loop so a hung Security Center RPC can never stall sends)
                 SystemMetricsService.RefreshOsHealthInBackground();
@@ -208,6 +248,7 @@ namespace MetricsPusher.Services
                 bool sendFailing = false;
                 bool oversizeWarned = false;
                 int ticksSinceOsHealth = 0;
+                int ticksSinceSensorLog = 0;
 
                 while (await timer.WaitForNextTickAsync(cancellationToken).ConfigureAwait(false))
                 {
@@ -220,7 +261,24 @@ namespace MetricsPusher.Services
                     if (!GpuMonitorService.IsGpuAvailable)
                         continue;
 
-                    byte[]? datagram = BuildPayloadUtf8(GpuMonitorService.GetGpuMetrics(), SystemMetricsService.GetSystemMetrics(), hostName);
+                    SystemMetrics systemMetrics = SystemMetricsService.GetSystemMetrics();
+
+                    // The whole per-tick cost of the new sensors: one temperature read, one
+                    // energy read, one disk read. The power limit is a cached field, read
+                    // once at init. None of the four reaches the wire yet - see the comment
+                    // on these properties in SystemMetricsService.
+                    systemMetrics.CpuTemperature = cpuSensors.ReadTemperature();
+                    systemMetrics.CpuPowerWatts = ToWholeWatts(cpuSensors.ReadPackagePower());
+                    systemMetrics.CpuPowerLimitWatts = ToWholeWatts(cpuSensors.PackagePowerLimitWatts);
+                    systemMetrics.NvmeTemperature = diskSensor.TryRead(out float diskCelsius) ? diskCelsius : null;
+
+                    if (++ticksSinceSensorLog >= SensorLogTicks)
+                    {
+                        ticksSinceSensorLog = 0;
+                        LogSensorReadings(systemMetrics, cpuSensors.Source);
+                    }
+
+                    byte[]? datagram = BuildPayloadUtf8(GpuMonitorService.GetGpuMetrics(), systemMetrics, hostName);
                     if (datagram == null)
                         continue;
 
@@ -261,8 +319,40 @@ namespace MetricsPusher.Services
             finally
             {
                 client?.Dispose();
+
+                // The CPU service disposes its providers before the PawnIO handle they share
+                // - it owns that order, and this call site must not try to help.
+                cpuSensors?.Dispose();
+                diskSensor?.Dispose();
                 LoggingService.Info("GpuDisplayPushService: stopped");
             }
+        }
+
+        /// <summary>
+        /// Rounds a wattage to whole watts, matching how the GPU's <c>watts</c> and
+        /// <c>limitW</c> are already carried. Null in, null out - an absent reading must
+        /// stay absent rather than becoming a zero.
+        /// </summary>
+        /// <param name="watts">The reading, or null.</param>
+        /// <returns>The reading in whole watts, or null.</returns>
+        private static int? ToWholeWatts(float? watts)
+        {
+            return watts == null ? null : (int)MathF.Round(watts.Value);
+        }
+
+        /// <summary>
+        /// One Debug line a minute carrying the sensors that are not on the wire yet. The
+        /// source is included because an ACPI thermal-zone reading and a die reading are not
+        /// the same measurement, and a number alone would not say which one this is.
+        /// </summary>
+        /// <param name="systemMetrics">The metrics just collected.</param>
+        /// <param name="cpuTemperatureSource">Where the CPU temperature came from.</param>
+        private static void LogSensorReadings(SystemMetrics systemMetrics, CpuTemperatureSource cpuTemperatureSource)
+        {
+            LoggingService.Debug(
+                $"GpuDisplayPushService: CPU {systemMetrics.CpuTemperature?.ToString("F1") ?? "-"} C ({cpuTemperatureSource}), " +
+                $"package {systemMetrics.CpuPowerWatts?.ToString() ?? "-"} W of {systemMetrics.CpuPowerLimitWatts?.ToString() ?? "-"} W, " +
+                $"disk {systemMetrics.NvmeTemperature?.ToString("F1") ?? "-"} C");
         }
 
         /// <summary>

@@ -1,4 +1,4 @@
-using System.Runtime.InteropServices;
+﻿using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 using Microsoft.Win32;
 
@@ -22,6 +22,43 @@ namespace MetricsPusher.Services
         public int? RebootPending { get; set; }
         public int? FirewallEnabled { get; set; }
         public long? UptimeSeconds { get; set; }
+
+        // ---------------------------------------------------------------------------
+        // NOT ON THE WIRE, AND THAT IS DELIBERATE. Read this before "fixing" it.
+        //
+        // The four properties below - CpuTemperature, CpuPowerWatts, CpuPowerLimitWatts
+        // and NvmeTemperature - are populated on every tick by GpuDisplayPushService's
+        // push loop and are intentionally NOT mapped in BuildPayload. This commit adds
+        // the providers only; putting any one of them on the wire is a separate change
+        // that must, in the SAME commit:
+        //
+        //   1. raise GpuDisplayPushService.MaxDatagramBytes (the worst case EQUALS the
+        //      522-byte ceiling today - there is no slack to spend),
+        //   2. re-pin the worst-case datagram test in GpuDisplayPushServiceTests, and
+        //   3. update push_metrics.md - sections 3.1, 3.3, 4, 5, 6, 8.3, 8.4 and 9.
+        //
+        // Adding a key does not break consumers, so the protocol version stays 1; the
+        // budget and the document are what move. Note also that a CPU temperature needs
+        // its provenance decided first: CpuTemperatureService.Source distinguishes a die
+        // reading from an ACPI board sensor, and section 5 of the protocol document has
+        // to say which absence semantics apply before either can be shipped.
+        //
+        // They are carried on this DTO rather than in a second structure because they are
+        // per-tick system metrics like every other property here, and because the moment
+        // they do go on the wire, BuildPayload is where they will be read from.
+        // ---------------------------------------------------------------------------
+
+        /// <summary>CPU temperature in °C - die on Intel/AMD via PawnIO, otherwise an ACPI zone.</summary>
+        public float? CpuTemperature { get; set; }
+
+        /// <summary>CPU package power in whole watts, from the RAPL energy accumulator.</summary>
+        public int? CpuPowerWatts { get; set; }
+
+        /// <summary>CPU package power limit in whole watts. Intel only - absent on AMD is structural.</summary>
+        public int? CpuPowerLimitWatts { get; set; }
+
+        /// <summary>System disk temperature in °C, from IOCTL_STORAGE_QUERY_PROPERTY.</summary>
+        public float? NvmeTemperature { get; set; }
     }
 
     /// <summary>
@@ -143,6 +180,23 @@ namespace MetricsPusher.Services
         private static volatile int _firewallStatusCode = -1;
         private static volatile bool _wscUnavailable; // Latched (no Security Center on this SKU) - never retried, like PdhState.Failed
         private static int _osHealthRefreshRunning; // Interlocked gate: skip a refresh while the previous one is still blocked
+
+        /// <summary>
+        /// The cached CPU name on its own, without collecting anything else.
+        /// <para>
+        /// It exists for <c>CpuTemperatureService</c>, which needs the name twice at
+        /// startup - to pick which PawnIO module to try first, and to resolve
+        /// <c>AmdSmnTemperatureProvider</c>'s Tdie offset - and for nothing else. The
+        /// alternative was calling <see cref="GetSystemMetrics"/> for one string, which
+        /// would drag a PDH collect, a GlobalMemoryStatusEx and two disk reads along with
+        /// it, and would perturb the CPU-usage counter's sampling interval on the way past.
+        /// </para>
+        /// <para>
+        /// Backed by the same <c>Lazy</c> the metrics sweep uses, so the registry is still
+        /// read exactly once per process no matter which of the two asks first.
+        /// </para>
+        /// </summary>
+        internal static string? CpuName => _cpuName.Value;
 
         /// <summary>
         /// Reads all system metrics. Each metric fails independently (null = unavailable

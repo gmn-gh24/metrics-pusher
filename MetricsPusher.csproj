@@ -65,6 +65,18 @@
 
   <ItemGroup>
     <EmbeddedResource Include="Resources\trayicon.ico" />
+    <!-- PawnIO assets, embedded so the exe stays a single copy-and-run file. The two .bin
+         modules are RSA-signed Pawn bytecode from PawnIO.Modules 0.2.10, redistributed
+         unmodified under LGPL-2.1-or-later - COPYING is that licence text and must ship
+         with them. PawnIO_setup.exe is the 2.2.0 driver installer, extracted and run only
+         when the user accepts the first-run prompt. Refreshing these is one atomic task:
+         replace all three module-release files together and re-record the SHA-256s in
+         README.md. Manifest names are path-derived, e.g.
+         MetricsPusher.Resources.PawnIo.IntelMSR.bin. -->
+    <EmbeddedResource Include="Resources\PawnIo\IntelMSR.bin" />
+    <EmbeddedResource Include="Resources\PawnIo\AMDFamily17.bin" />
+    <EmbeddedResource Include="Resources\PawnIo\COPYING" />
+    <EmbeddedResource Include="Resources\PawnIO_setup.exe" />
   </ItemGroup>
 
   <!-- Exclude the test project subfolder from compilation -->

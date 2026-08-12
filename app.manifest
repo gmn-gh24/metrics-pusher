@@ -3,21 +3,24 @@
   <!-- Version here is cosmetic; the real version comes from the csproj -->
   <assemblyIdentity version="1.0.0.0" name="MetricsPusher"/>
 
-  <!-- The passive half of the no-admin rule. Declaring asInvoker explicitly suppresses
-       Windows' installer-detection heuristic, which can otherwise offer to elevate an
-       unmanifested executable. The active half - refusing to run when already elevated -
-       is in Program.Main. -->
+  <!-- Elevation is required, not optional. CPU die temperature is read through PawnIO,
+       whose device DACL is "D:P(A;;GA;;;SY)(A;;GA;;;BA)" - protected, GENERIC_ALL for
+       SYSTEM and Builtin Administrators and nobody else. A non-elevated process gets
+       ERROR_ACCESS_DENIED from CreateFile on \\?\GLOBALROOT\Device\PawnIO, so without an
+       admin token the sensor is simply unreadable; there is no unprivileged path to it.
+       The costs are accepted, not overlooked: a UAC prompt on every launch, and standard
+       user accounts can no longer start the app at all. -->
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">
-        <requestedExecutionLevel level="asInvoker" uiAccess="false" />
+        <requestedExecutionLevel level="requireAdministrator" uiAccess="false" />
       </requestedPrivileges>
     </security>
   </trustInfo>
 
   <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
     <application>
-      <!-- Windows 10/11 (only OS supported by .NET 8) -->
+      <!-- Windows 10/11 (only OS supported by .NET 10) -->
       <supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}" />
     </application>
   </compatibility>

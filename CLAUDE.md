@@ -1,18 +1,18 @@
-# MetricsPusher
+﻿# MetricsPusher
 
 A Windows tray application whose only job is to push hardware metrics to a display panel
 on the local subnet: one JSON UDP datagram per second, fire-and-forget. There is a tray
 icon and a menu containing nothing but `Exit`. No installer, no service, no autostart.
 
-The metrics engine was extracted verbatim from `R:\Yupix\systray-app` (YupixTrayApp
-v5.12.1). **The wire contract is unchanged from that app** — see `push_metrics.md`, which
-is authoritative for anything on the wire.
+The metrics engine was extracted from `R:\Yupix\systray-app` (YupixTrayApp v5.12.1).
+MetricsPusher now adds CPU/NVMe fields to that schema without changing protocol `v: 1`;
+see `push_metrics.md`, which is authoritative for anything on the wire.
 
 ## Commands
 
 ```powershell
 dotnet build --warnaserror     # must be clean - StyleCop + Roslynator + CA5392 are enforced
-dotnet test                    # 447 tests
+dotnet test                    # 453 tests
 dotnet test --filter "FullyQualifiedName~GpuDisplayPushServiceTests"
 
 # Portable single-file exe (~130 MB, no .NET prerequisite on the target machine)
@@ -102,14 +102,12 @@ Logs: `%LOCALAPPDATA%\MetricsPusher\logs\app.log` (10 MB, rotates to `.1`–`.3`
   speaks the same protocol `1` the originating tray app's v5.12.0 spoke. Spelled out in
   `push_metrics.md` §3.
 - **Adding a wire field means raising `MaxDatagramBytes` and re-pinning the worst-case
-  test in the same change.** The worst case (522) *equals* the ceiling by design; there
+  test in the same change.** The worst case (591) *equals* the ceiling by design; there
   is no slack. Only a total approaching 1024 reopens the receiver contract.
-- **The four new `SystemMetrics` fields are deliberately unmapped.** `CpuTemperature`,
-  `CpuPowerWatts`, `CpuPowerLimitWatts` and `NvmeTemperature` are populated on every tick and
-  read by nothing but a Debug log line. Putting any one of them on the wire means raising
-  `MaxDatagramBytes`, re-pinning the worst-case datagram test and updating `push_metrics.md`
-  — all in the same change. The comment above them in `SystemMetricsService.cs` says the same
-  thing at the call site; do not "fix" the omission ahead of that change.
+- **`cpuTemp` is die/package-only.** `CpuTemperatureSource` travels with each reading;
+  `BuildPayload` maps `IntelPackageMsr` and `AmdTctlSmn` but deliberately omits
+  `AcpiThermalZone`. The ACPI fallback is a motherboard sensor with different placement
+  and lag, so serializing it under the same key would silently change the field's meaning.
 - **`NvmlService` is deliberately not thread-safe.** Every member must be called under
   `GpuMonitorService._lock`.
 - **The PawnIO device is opened `FILE_SHARE_READ | FILE_SHARE_WRITE` on purpose.** Do not

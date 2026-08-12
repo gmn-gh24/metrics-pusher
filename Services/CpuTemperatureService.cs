@@ -154,9 +154,8 @@ namespace MetricsPusher.Services
 
         /// <summary>
         /// Which sensor the readings come from, or <see cref="CpuTemperatureSource.None"/>
-        /// before the probe and on a machine with no source. Carried from day one because an
-        /// ACPI thermal zone and a die reading are not the same physical quantity, and a
-        /// future wire field must be able to say which one it is shipping.
+        /// before the probe and on a machine with no source. The wire mapping uses this to
+        /// publish only die/package readings and omit the non-equivalent ACPI board zone.
         /// </summary>
         public CpuTemperatureSource Source
         {
@@ -638,8 +637,8 @@ namespace MetricsPusher.Services
 
         /// <summary>
         /// The power limit as a fragment of the one startup line. It says "structurally
-        /// absent" rather than "unknown" on AMD because those are different facts, and until
-        /// there is a wire field the log is the only place anyone can see the difference.
+        /// absent" rather than "unknown" on AMD because those are different facts; the
+        /// wire expresses the same distinction by omitting the Intel-only limit on AMD.
         /// <para>
         /// Reads the fields directly rather than going through
         /// <see cref="PackagePowerLimitWatts"/>: it is only ever called from inside the

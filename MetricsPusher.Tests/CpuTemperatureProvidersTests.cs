@@ -31,8 +31,8 @@ namespace MetricsPusher.Tests
         public void CpuTemperatureSource_None_ShouldBeTheDefault()
         {
             // Assert - a default-initialized source must not claim to be a real sensor;
-            // the value is carried onto a future wire field, where "die" and "board
-            // thermal zone" are not interchangeable
+            // the value controls the wire mapping, where "die" and "board thermal
+            // zone" are not interchangeable
             Assert.Equal(CpuTemperatureSource.None, default(CpuTemperatureSource));
             Assert.Equal(0, (int)CpuTemperatureSource.None);
         }

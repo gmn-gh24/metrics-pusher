@@ -71,6 +71,22 @@ namespace MetricsPusher.Services
         [JsonPropertyName("cpuLoad")]
         public int? CpuLoad { get; set; }
 
+        /// <summary>CPU die/package temperature in degrees Celsius. ACPI zones are excluded.</summary>
+        [JsonPropertyName("cpuTemp")]
+        public float? CpuTemp { get; set; }
+
+        /// <summary>CPU package power in whole watts, from the RAPL energy accumulator.</summary>
+        [JsonPropertyName("cpuWatts")]
+        public int? CpuWatts { get; set; }
+
+        /// <summary>CPU package power limit in whole watts. Intel only.</summary>
+        [JsonPropertyName("cpuLimitW")]
+        public int? CpuLimitW { get; set; }
+
+        /// <summary>System NVMe disk temperature in degrees Celsius.</summary>
+        [JsonPropertyName("nvmeTemp")]
+        public float? NvmeTemp { get; set; }
+
         [JsonPropertyName("ramUsed")]
         public long? RamUsed { get; set; }
 
@@ -109,7 +125,7 @@ namespace MetricsPusher.Services
     /// Discovery: pings the display address once per minute for up to
     /// <see cref="Constants.DisplayDiscoveryAttempts"/> attempts; first reply freezes
     /// the endpoint for the session, exhaustion disables the feature until restart.
-    /// Push: one ~354-byte (≤522) JSON datagram per second. Never throws, never blocks.
+    /// Push: one ~415-byte (≤591) JSON datagram per second. Never throws, never blocks.
     /// </summary>
     internal static class GpuDisplayPushService
     {
@@ -141,20 +157,21 @@ namespace MetricsPusher.Services
         /// the widest numerics measured 386, then 448 -> 496 when power/clock/win/av/
         /// reboot/up added 84 worst-case bytes (measured 470); fw added 7 more
         /// (measured 477); vramClock added 18 more (measured 495); watts added 13 more
-        /// (measured 508); limitW added 14 more (measured 522), which is this cap.
+        /// (measured 508); limitW added 14 more (measured 522); cpuTemp, cpuWatts,
+        /// cpuLimitW and nvmeTemp added 69 more (measured 591), which is this cap.
         /// <para>
         /// The cap EQUALS the measured worst case (no headroom between them at all),
         /// exactly as it did at 508/508 - but the second interval is no longer spent:
         /// the v5.12.0 raise rode a renegotiation of the receiver floor from >= 512
         /// to >= 1024 bytes (the reference consumer's buffers were raised 496 -> 1024
-        /// in parallel), so 502 bytes now separate this cap from that floor. A further
+        /// in parallel), so 433 bytes now separate this cap from that floor. A further
         /// field therefore raises this constant and re-pins the worst-case test in
         /// the same change - and only a total approaching 1024 reopens the receiver
         /// contract in push_metrics.md. Pinned by the worst-case test, which
-        /// asserts both the exact 522 and this constant.
+        /// asserts both the exact 591 and this constant.
         /// </para>
         /// </summary>
-        internal const int MaxDatagramBytes = 522;
+        internal const int MaxDatagramBytes = 591;
 
         /// <summary>
         /// The push loop re-reads the slow-changing OS-health values every this many
@@ -169,9 +186,8 @@ namespace MetricsPusher.Services
         /// <see cref="OsHealthRefreshTicks"/>, on the existing timer, not a second
         /// mechanism.
         /// <para>
-        /// It exists because none of those readings is on the wire yet, so without this line
-        /// there is no way to tell a working sensor from a silent one short of a debugger.
-        /// One formatted string per minute is the whole cost.
+        /// It preserves source provenance and makes intermittent sensor loss visible without
+        /// packet capture. One formatted string per minute is the whole cost.
         /// </para>
         /// </summary>
         private const int SensorLogTicks = 60;
@@ -265,8 +281,9 @@ namespace MetricsPusher.Services
 
                     // The whole per-tick cost of the new sensors: one temperature read, one
                     // energy read, one disk read. The power limit is a cached field, read
-                    // once at init. None of the four reaches the wire yet - see the comment
-                    // on these properties in SystemMetricsService.
+                    // once at init. CpuTemperatureSource travels with the reading so the
+                    // wire mapping can exclude the non-equivalent ACPI board-zone fallback.
+                    systemMetrics.CpuTemperatureSource = cpuSensors.Source;
                     systemMetrics.CpuTemperature = cpuSensors.ReadTemperature();
                     systemMetrics.CpuPowerWatts = ToWholeWatts(cpuSensors.ReadPackagePower());
                     systemMetrics.CpuPowerLimitWatts = ToWholeWatts(cpuSensors.PackagePowerLimitWatts);
@@ -341,7 +358,7 @@ namespace MetricsPusher.Services
         }
 
         /// <summary>
-        /// One Debug line a minute carrying the sensors that are not on the wire yet. The
+        /// One Debug line a minute carrying the CPU/NVMe sensors and CPU provenance. The
         /// source is included because an ACPI thermal-zone reading and a die reading are not
         /// the same measurement, and a number alone would not say which one this is.
         /// </summary>
@@ -358,7 +375,7 @@ namespace MetricsPusher.Services
         /// <summary>
         /// Edge-triggered guard for the one contract this service cannot otherwise
         /// enforce at runtime: <see cref="MaxDatagramBytes"/> is pinned by a unit test,
-        /// and the worst case EQUALS that ceiling (522 of 522 since v5.12.0, under a
+        /// and the worst case EQUALS that ceiling (591 of 591, under a
         /// >= 1024-byte receiver floor). A field added without re-running that
         /// test would overrun a consumer's buffer silently, in the field.
         /// <para>
@@ -463,10 +480,12 @@ namespace MetricsPusher.Services
 
         /// <summary>
         /// Builds the wire payload. Returns null when every per-tick live metric
-        /// (GPU temperature/load/VRAM/fan/power/watts/clocks, CPU usage, RAM, disk) is null -
+        /// (GPU temperature/load/VRAM/fan/power/watts/clocks, CPU usage/temperature/
+        /// power, NVMe temperature, RAM, disk) is null -
         /// identity/ambient fields (GPU name, host name, CPU name, Windows version,
         /// uptime, antivirus health, firewall status, pending reboot, enforced power
-        /// limit) alone send no datagram.
+        /// limits) alone send no datagram. CpuTemp means a die/package reading; an ACPI
+        /// board-zone reading is deliberately treated as absent on the wire.
         /// The ambient fields are excluded because they are practically always
         /// available (uptime always, av/fw/reboot from the slow cache), so counting any
         /// of them would make this guard dead code and blank the display's last-good
@@ -480,6 +499,9 @@ namespace MetricsPusher.Services
                 metrics.PowerPercent == null && metrics.PowerWatts == null &&
                 metrics.CoreClockMHz == null && metrics.MemoryClockMHz == null &&
                 systemMetrics.CpuUsagePercent == null &&
+                GetWireCpuTemperature(systemMetrics) == null &&
+                systemMetrics.CpuPowerWatts == null &&
+                systemMetrics.NvmeTemperature == null &&
                 systemMetrics.RamUsedMB == null && systemMetrics.RamTotalMB == null &&
                 systemMetrics.DiskFreeGB == null && systemMetrics.DiskTotalGB == null)
             {
@@ -503,6 +525,10 @@ namespace MetricsPusher.Services
                 VramClock = metrics.MemoryClockMHz,
                 Cpu = TruncateIdentity(systemMetrics.CpuName),
                 CpuLoad = systemMetrics.CpuUsagePercent,
+                CpuTemp = GetWireCpuTemperature(systemMetrics),
+                CpuWatts = systemMetrics.CpuPowerWatts,
+                CpuLimitW = GetWireCpuPowerLimit(systemMetrics),
+                NvmeTemp = systemMetrics.NvmeTemperature,
                 RamUsed = systemMetrics.RamUsedMB,
                 RamTotal = systemMetrics.RamTotalMB,
                 DiskFree = systemMetrics.DiskFreeGB,
@@ -513,6 +539,28 @@ namespace MetricsPusher.Services
                 Fw = systemMetrics.FirewallEnabled,
                 Up = systemMetrics.UptimeSeconds,
             };
+        }
+
+        /// <summary>
+        /// Returns only a CPU die/package reading for the wire. The ACPI fallback is a
+        /// motherboard thermal zone with different lag and placement; serializing it as
+        /// <c>cpuTemp</c> would silently change that field's physical meaning by machine.
+        /// </summary>
+        private static float? GetWireCpuTemperature(SystemMetrics systemMetrics)
+        {
+            return systemMetrics.CpuTemperatureSource is CpuTemperatureSource.IntelPackageMsr or CpuTemperatureSource.AmdTctlSmn
+                ? systemMetrics.CpuTemperature
+                : null;
+        }
+
+        /// <summary>
+        /// Excludes zero from the CPU limit just as the GPU <c>limitW</c> mapping does.
+        /// The provider validates a positive floating-point limit before rounding, but a
+        /// sub-half-watt value could otherwise round to zero and masquerade as a real limit.
+        /// </summary>
+        private static int? GetWireCpuPowerLimit(SystemMetrics systemMetrics)
+        {
+            return systemMetrics.CpuPowerLimitWatts > 0 ? systemMetrics.CpuPowerLimitWatts : null;
         }
 
         /// <summary>

@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Net;
 using System.Text;
 using System.Text.Json;
@@ -129,6 +129,11 @@ namespace MetricsPusher.Tests
             {
                 CpuName = "Intel Core i9-14900K",
                 CpuUsagePercent = 31,
+                CpuTemperature = 71.5f,
+                CpuTemperatureSource = CpuTemperatureSource.IntelPackageMsr,
+                CpuPowerWatts = 125,
+                CpuPowerLimitWatts = 253,
+                NvmeTemperature = 42.5f,
                 RamUsedMB = 18432,
                 RamTotalMB = 65536,
                 DiskFreeGB = 512,
@@ -145,7 +150,7 @@ namespace MetricsPusher.Tests
 
             // Assert - exact string pins the wire key order and number formatting
             Assert.Equal(
-                "{\"v\":1,\"gpu\":\"NVIDIA GeForce RTX 4070\",\"host\":\"TEST-HOST-001\",\"temp\":62.5,\"load\":45,\"vramUsed\":3821,\"vramTotal\":12282,\"fan\":38,\"power\":87,\"watts\":174,\"limitW\":200,\"clock\":2610,\"vramClock\":10501,\"cpu\":\"Intel Core i9-14900K\",\"cpuLoad\":31,\"ramUsed\":18432,\"ramTotal\":65536,\"diskFree\":512,\"diskTotal\":1863,\"win\":\"11 23H2\",\"av\":0,\"reboot\":0,\"fw\":1,\"up\":345600}",
+                "{\"v\":1,\"gpu\":\"NVIDIA GeForce RTX 4070\",\"host\":\"TEST-HOST-001\",\"temp\":62.5,\"load\":45,\"vramUsed\":3821,\"vramTotal\":12282,\"fan\":38,\"power\":87,\"watts\":174,\"limitW\":200,\"clock\":2610,\"vramClock\":10501,\"cpu\":\"Intel Core i9-14900K\",\"cpuLoad\":31,\"cpuTemp\":71.5,\"cpuWatts\":125,\"cpuLimitW\":253,\"nvmeTemp\":42.5,\"ramUsed\":18432,\"ramTotal\":65536,\"diskFree\":512,\"diskTotal\":1863,\"win\":\"11 23H2\",\"av\":0,\"reboot\":0,\"fw\":1,\"up\":345600}",
                 json);
         }
 
@@ -187,11 +192,99 @@ namespace MetricsPusher.Tests
             Assert.DoesNotContain("\"limitW\"", json);
             Assert.DoesNotContain("\"clock\"", json);
             Assert.DoesNotContain("\"vramClock\"", json);
+            Assert.DoesNotContain("\"cpuTemp\"", json);
+            Assert.DoesNotContain("\"cpuWatts\"", json);
+            Assert.DoesNotContain("\"cpuLimitW\"", json);
+            Assert.DoesNotContain("\"nvmeTemp\"", json);
             Assert.DoesNotContain("\"win\"", json);
             Assert.DoesNotContain("\"av\"", json);
             Assert.DoesNotContain("\"reboot\"", json);
             Assert.DoesNotContain("\"fw\"", json);
             Assert.DoesNotContain("\"up\"", json);
+        }
+
+        [Theory]
+        [InlineData((int)CpuTemperatureSource.IntelPackageMsr)]
+        [InlineData((int)CpuTemperatureSource.AmdTctlSmn)]
+        public void BuildPayloadJson_ShouldIncludeCpuTemp_WhenSourceIsCpuDie(int sourceValue)
+        {
+            // Arrange
+            var systemMetrics = new SystemMetrics
+            {
+                CpuTemperature = 72.5f,
+                CpuTemperatureSource = (CpuTemperatureSource)sourceValue,
+            };
+
+            // Act
+            var json = GpuDisplayPushService.BuildPayloadJson(new GpuMetrics(), systemMetrics, null);
+
+            // Assert
+            Assert.Equal("{\"v\":1,\"cpuTemp\":72.5}", json);
+        }
+
+        [Fact]
+        public void BuildPayloadJson_ShouldOmitCpuTemp_WhenSourceIsAcpiThermalZone()
+        {
+            // Arrange - ACPI is a motherboard zone, not a CPU die sensor. A GPU reading
+            // keeps the payload alive so this test can distinguish omission from suppression.
+            var metrics = new GpuMetrics { Temperature = 60f };
+            var systemMetrics = new SystemMetrics
+            {
+                CpuTemperature = 45f,
+                CpuTemperatureSource = CpuTemperatureSource.AcpiThermalZone,
+            };
+
+            // Act
+            var json = GpuDisplayPushService.BuildPayloadJson(metrics, systemMetrics, null);
+
+            // Assert
+            Assert.Equal("{\"v\":1,\"temp\":60}", json);
+        }
+
+        [Fact]
+        public void BuildPayloadJson_ShouldIncludeCpuPowerAndNvmeTemperatureIndependently()
+        {
+            // Arrange
+            var systemMetrics = new SystemMetrics
+            {
+                CpuPowerWatts = 125,
+                CpuPowerLimitWatts = 253,
+                NvmeTemperature = 42.5f,
+            };
+
+            // Act
+            var json = GpuDisplayPushService.BuildPayloadJson(new GpuMetrics(), systemMetrics, null);
+
+            // Assert
+            Assert.Equal("{\"v\":1,\"cpuWatts\":125,\"cpuLimitW\":253,\"nvmeTemp\":42.5}", json);
+        }
+
+        [Fact]
+        public void BuildPayloadJson_ShouldReturnNull_WhenOnlyCpuLimitWIsPresent()
+        {
+            // Arrange - an enforced limit is ambient, like the GPU limitW field.
+            var systemMetrics = new SystemMetrics { CpuPowerLimitWatts = 253 };
+
+            // Act
+            var json = GpuDisplayPushService.BuildPayloadJson(new GpuMetrics(), systemMetrics, null);
+
+            // Assert
+            Assert.Null(json);
+        }
+
+        [Fact]
+        public void BuildPayloadJson_ShouldOmitCpuLimitW_WhenRoundedValueIsZero()
+        {
+            // Arrange - a live GPU value keeps the payload alive so the limit omission
+            // is visible. Zero is not a meaningful enforced limit.
+            var metrics = new GpuMetrics { Temperature = 60f };
+            var systemMetrics = new SystemMetrics { CpuPowerLimitWatts = 0 };
+
+            // Act
+            var json = GpuDisplayPushService.BuildPayloadJson(metrics, systemMetrics, null);
+
+            // Assert
+            Assert.Equal("{\"v\":1,\"temp\":60}", json);
         }
 
         [Fact]
@@ -531,7 +624,7 @@ namespace MetricsPusher.Tests
                 // It is the widest REAL one: both backends report whole degrees (NVML
                 // returns an integer, NVAPI's sensors are integral), so no datagram this
                 // sender can actually produce is wider than the fixture. That deliberate
-                // ~3-byte gap is load-bearing at 522/522 - a future field must not lean on
+                // ~3-byte gap is load-bearing at 591/591 - a future field must not lean on
                 // it, and if a backend ever reports fractional degrees the budget has to
                 // be recomputed, not just this fixture widened.
                 Temperature = 105.75f,
@@ -549,6 +642,11 @@ namespace MetricsPusher.Tests
             {
                 CpuName = new string('C', GpuDisplayPushService.MaxIdentityLength),
                 CpuUsagePercent = 100,
+                CpuTemperature = 149.875f, // Widest real AMD 0.125 C step below the cap
+                CpuTemperatureSource = CpuTemperatureSource.AmdTctlSmn,
+                CpuPowerWatts = 1000,      // The plausibility cap is inclusive
+                CpuPowerLimitWatts = 1000,
+                NvmeTemperature = 149.85f, // Widest real tier-2 Kelvin conversion below the cap
                 RamUsedMB = 8388608,   // 8 TB of RAM
                 RamTotalMB = 8388608,
                 DiskFreeGB = 1048576,  // 1 PB system volume
@@ -573,22 +671,20 @@ namespace MetricsPusher.Tests
             Assert.True(byteCount <= GpuDisplayPushService.MaxDatagramBytes, overBudgetMessage);
 
             // ... and the exact figure is pinned, because there is no slack left
-            // between the worst case and the ceiling: v5.10.0's watts took the worst
-            // case to 508, and `,"limitW":1999` adds 14 bytes (1 comma + 8 quoted key
-            // + 1 colon + 4 digits) for 522 - which is exactly the v5.12.0 ceiling.
-            // The receiver floor was renegotiated >= 512 -> >= 1024 alongside it (the
-            // reference ESP32's buffers went 496 -> 1024), so 502 bytes now separate
-            // the ceiling from the floor: the NEXT field is a sender-side change
+            // between the worst case and the ceiling: the four CPU/NVMe fields add 69
+            // bytes to v5.12.0's 522-byte worst case for 591. The receiver floor remains
+            // >= 1024, so 433 bytes separate the ceiling from the floor: the NEXT field
+            // is still a sender-side change
             // again - raise MaxDatagramBytes, re-pin this test and update
             // push_metrics.md section 3.3 together - until the total approaches 1024.
-            Assert.Equal(522, byteCount);
-            Assert.Equal(522, GpuDisplayPushService.MaxDatagramBytes);
+            Assert.Equal(591, byteCount);
+            Assert.Equal(591, GpuDisplayPushService.MaxDatagramBytes);
         }
 
         [Fact]
         public void BuildPayloadJson_ShouldStayWellUnderBudget_WhenHardwareIsTypical()
         {
-            // Arrange - representative desktop; the class doc promises ~354 bytes here
+            // Arrange - representative desktop; the class doc promises ~415 bytes here
             // (311 at v5.9.0, +18 for vramClock, +12 for a typical three-digit watts,
             // +13 for a typical three-digit limitW)
             var metrics = new GpuMetrics
@@ -609,6 +705,11 @@ namespace MetricsPusher.Tests
             {
                 CpuName = "Intel Core i9-14900K",
                 CpuUsagePercent = 31,
+                CpuTemperature = 71.5f,
+                CpuTemperatureSource = CpuTemperatureSource.IntelPackageMsr,
+                CpuPowerWatts = 125,
+                CpuPowerLimitWatts = 253,
+                NvmeTemperature = 42.5f,
                 RamUsedMB = 18432,
                 RamTotalMB = 65536,
                 DiskFreeGB = 812,
@@ -625,7 +726,7 @@ namespace MetricsPusher.Tests
 
             // Assert
             Assert.NotNull(json);
-            Assert.InRange(Encoding.UTF8.GetByteCount(json), 1, 360);
+            Assert.InRange(Encoding.UTF8.GetByteCount(json), 1, 425);
         }
 
         [Fact]

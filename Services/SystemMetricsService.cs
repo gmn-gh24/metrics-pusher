@@ -23,33 +23,15 @@ namespace MetricsPusher.Services
         public int? FirewallEnabled { get; set; }
         public long? UptimeSeconds { get; set; }
 
-        // ---------------------------------------------------------------------------
-        // NOT ON THE WIRE, AND THAT IS DELIBERATE. Read this before "fixing" it.
-        //
-        // The four properties below - CpuTemperature, CpuPowerWatts, CpuPowerLimitWatts
-        // and NvmeTemperature - are populated on every tick by GpuDisplayPushService's
-        // push loop and are intentionally NOT mapped in BuildPayload. This commit adds
-        // the providers only; putting any one of them on the wire is a separate change
-        // that must, in the SAME commit:
-        //
-        //   1. raise GpuDisplayPushService.MaxDatagramBytes (the worst case EQUALS the
-        //      522-byte ceiling today - there is no slack to spend),
-        //   2. re-pin the worst-case datagram test in GpuDisplayPushServiceTests, and
-        //   3. update push_metrics.md - sections 3.1, 3.3, 4, 5, 6, 8.3, 8.4 and 9.
-        //
-        // Adding a key does not break consumers, so the protocol version stays 1; the
-        // budget and the document are what move. Note also that a CPU temperature needs
-        // its provenance decided first: CpuTemperatureService.Source distinguishes a die
-        // reading from an ACPI board sensor, and section 5 of the protocol document has
-        // to say which absence semantics apply before either can be shipped.
-        //
-        // They are carried on this DTO rather than in a second structure because they are
-        // per-tick system metrics like every other property here, and because the moment
-        // they do go on the wire, BuildPayload is where they will be read from.
-        // ---------------------------------------------------------------------------
-
         /// <summary>CPU temperature in °C - die on Intel/AMD via PawnIO, otherwise an ACPI zone.</summary>
         public float? CpuTemperature { get; set; }
+
+        /// <summary>
+        /// Provenance for <see cref="CpuTemperature"/>. The wire emits <c>cpuTemp</c>
+        /// only for IntelPackageMsr and AmdTctlSmn; an ACPI zone is a board sensor and
+        /// deliberately remains local to the diagnostic log.
+        /// </summary>
+        public CpuTemperatureSource CpuTemperatureSource { get; set; }
 
         /// <summary>CPU package power in whole watts, from the RAPL energy accumulator.</summary>
         public int? CpuPowerWatts { get; set; }

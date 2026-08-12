@@ -1,6 +1,6 @@
-# MetricsPusher — UDP Metrics Protocol Reference
+﻿# MetricsPusher — UDP Metrics Protocol Reference
 
-**Protocol version: `1` &nbsp;|&nbsp; Sender version: MetricsPusher v1.0.0 (wire unchanged since the originating tray app's v5.12.0) &nbsp;|&nbsp; Status: authoritative**
+**Protocol version: `1` &nbsp;|&nbsp; Sender version: MetricsPusher next (v1.0.0 plus additive CPU/NVMe fields) &nbsp;|&nbsp; Status: authoritative**
 
 This document fully specifies the UDP metrics datagram pushed by MetricsPusher
 (Windows). The feed is **consumer-agnostic**: any device or
@@ -25,7 +25,7 @@ the authoritative sources are listed in [§12](#12-authoritative-sources-in-this
 | Source port | Ephemeral (do not rely on it) |
 | Cadence | **1 datagram per second** (see [§7](#7-send-conditions-and-suppression-rules) for when ticks are skipped) |
 | Reliability | Fire-and-forget. **No ACK, no retransmit, no sequence numbers, no ordering guarantees.** |
-| Datagram size | ≤ **522 bytes** by contract (raised from 496 in v5.10.0 and from 508 in v5.12.0 — see §3.3). Bounded by per-string truncation plus plausible numeric widths and **pinned by a worst-case unit test — the sender does not measure the datagram at runtime.** Receivers MUST buffer ≥ **1024 bytes** (≥ 512 sufficed for senders < v5.12.0) and never assume a fixed size. |
+| Datagram size | ≤ **591 bytes** by contract (raised from 522 for the CPU/NVMe fields — see §3.3). Bounded by per-string truncation plus plausible numeric widths and **pinned by a worst-case unit test**; the sender also checks each serialized length and logs an edge-triggered warning if an overrun somehow escapes that fixture. Receivers MUST buffer ≥ **1024 bytes** (≥ 512 sufficed for senders < v5.12.0) and never assume a fixed size. |
 | Fragmentation | Never — one metrics report is always exactly one datagram, well under any MTU. |
 | Encryption / auth | **None.** Cleartext JSON on the local subnet (see [§10](#10-security-model)). |
 
@@ -105,6 +105,11 @@ sender's socket, so a powered-off consumer costs the sender nothing.
 ```
 (338 bytes)
 
+This remains the last packet capture from released hardware and is full for the v5.12.0 /
+MetricsPusher v1.0.0 schema. The current additive schema appends `cpuTemp`, `cpuWatts`,
+`cpuLimitW` and `nvmeTemp` when their sources are available; §4 is authoritative for
+those keys, and §5 explains why an AMD sender normally omits `cpuLimitW`.
+
 This is a second-pass capture for a reason that belongs to the **capture harness, not to
 the wire**: the harness calls the payload builder directly and so has no pre-loop phase,
 where the real sender primes the PDH baseline and queues the first OS-health refresh
@@ -182,6 +187,7 @@ never on a sender release number, which you cannot see anyway.
 | v5.8.1 | `fw`; worst-case datagram 470 → 477 bytes (budget 496 unchanged) |
 | v5.10.0 | `vramClock` and `watts`; worst-case datagram 477 → 495 → **508** bytes and the **budget ceiling raised 496 → 508** (see §3.3). GPU metrics moved to NVML with NVAPI as fallback: no existing field changed shape, but on the NVML path **every** GPU field is now re-read every second (see §6), and `watts` exists only on that path (see §5) |
 | v5.12.0 | `limitW` — the enforced power limit the `power` percentage divides by, published from the sender's existing acquire-time cache (NVML backend only, like `watts`). Worst-case datagram 508 → **522**, **budget ceiling raised 508 → 522**; **receiver floor renegotiated ≥ 512 → ≥ 1024** (see §3.3) |
+| MetricsPusher next | `cpuTemp`, `cpuWatts`, `cpuLimitW`, `nvmeTemp`; worst-case datagram and ceiling 522 → **591**. `cpuTemp` is deliberately die/package-only: an ACPI motherboard thermal-zone fallback is not serialized under that key. Protocol `v` remains `1` because all four keys are additive. |
 
 ### 3.2 Older senders in the field
 
@@ -196,6 +202,7 @@ On a mixed fleet a consumer can meet pre-5.8.0 senders. Consequences:
 - **< v5.8.1:** no `fw`.
 - **< v5.10.0:** no `vramClock`, no `watts`; GPU fields are cadence-tiered (§6), so `vram*`/`fan`/`power` can be up to ~3.95 s old. Datagrams are ≤ 496 bytes there.
 - **< v5.12.0:** no `limitW`. Datagrams are ≤ 508 bytes there.
+- **MetricsPusher v1.0.0:** no `cpuTemp`, `cpuWatts`, `cpuLimitW` or `nvmeTemp`.
 
 All are `v:1`; version cannot distinguish sender age — presence of fields can.
 
@@ -209,6 +216,7 @@ All are `v:1`; version cannot distinguish sender age — presence of fields can.
 | v5.10.0 (`vramClock`) | 496 | 495 | 1 | 16 |
 | v5.10.0 (`watts`) | 508 | 508 | 0 | 4 |
 | **v5.12.0 (`limitW`)** | **522** | **522** | **0** | **502** |
+| **MetricsPusher next (CPU/NVMe)** | **591** | **591** | **0** | **433** |
 
 The 496 → 508 raise was a deliberate renegotiation, taken with the consequence stated
 up front: the ceiling then **equalled** the worst case, and only **4 bytes** separated it
@@ -218,10 +226,10 @@ paid that consequence — see "Consequence for future senders" below.
 One deliberate cushion sits inside the pinned worst case, and it is worth knowing before
 anyone tries to spend it. The worst-case fixture uses `105.75` — a **6-byte fractional**
 temperature — even though both driver stacks report **whole** degrees today (NVML returns
-an integer, NVAPI's sensors are integral). So the pinned 522 already carries a temperature
+an integer, NVAPI's sensors are integral). So the pinned 591 already carries a GPU temperature
 roughly **3 bytes wider than any datagram this sender can actually produce**. That gap is
-load-bearing at 522/522: it is what keeps real traffic clear of the ceiling, and a future
-field must not treat it as free space — the 502 bytes of headroom to the receiver floor
+load-bearing at 591/591: it is what keeps real traffic clear of the ceiling, and a future
+field must not treat it as free space — the 433 bytes of headroom to the receiver floor
 are the room for growth, this ~3-byte cushion is not.
 
 The residual exposure is narrow but real: `temp` is validated only against 0–150, so a
@@ -234,8 +242,8 @@ re-measured, since there is nothing left between the worst case and the ceiling 
 about, in the order that warning prescribed. The reference consumer's receive buffers
 were raised **496 → 1024 bytes first**, and only then was this document's receiver floor
 renegotiated **≥ 512 → ≥ 1024** and the sender's ceiling raised 508 → 522. The ceiling
-again **equals** the measured worst case, so `limitW` bought no slack there — but it
-bought 502 bytes of slack to the floor. The practical rule flips back as a result: the
+again **equals** the measured worst case. The CPU/NVMe extension then raised that exact
+ceiling 522 → 591, leaving 433 bytes of slack to the floor. The practical rule remains: the
 **next** field is a sender-side change again — raise `MaxDatagramBytes`, re-pin the
 worst-case test and extend this table in one commit — and the receiver contract only
 re-enters negotiation when the total approaches **1024**. Consumers that already buffered
@@ -277,6 +285,10 @@ using values in layout math.
 | `vramClock` | int | MHz | 1 – 19999 | **yes** (0 < x < 20000) | 1 s | GPU memory (VRAM) clock. **Its own, wider cap than `clock`:** memory clocks are reported on a different scale — GDDR6X reads ~`10501` under load and ~`405` at idle on an RTX 3090 Ti, so a 5-digit value is normal and is not an error. Absent on senders < v5.10.0. |
 | `cpu` | string | text, ≤ 63 encoded bytes | — | truncated | session | CPU name from the registry with marketing noise stripped: `(R)`/`(TM)`, `@ x.xGHz`, `N-Core Processor`, `with Radeon Graphics`, the standalone word `CPU`; whitespace runs collapsed. If nothing survives cleaning, the key is absent. |
 | `cpuLoad` | int | % | 0 – 100 | **yes** (clamped 0–100) | 1 s | Total CPU utilization from PDH counter `% Processor Utility` — matches Windows Task Manager's CPU %. Normally present from the **first** datagram (the sender primes the counter's baseline before the loop starts). |
+| `cpuTemp` | **float** | °C | 0 – 150 | **yes** (0–150, NaN/∞ rejected) | 1 s | CPU **die/package** temperature: Intel package thermal-status MSR or AMD Tdie decoded from Tctl via PawnIO. This key has one physical meaning on every machine. The degraded ACPI thermal-zone provider is a motherboard sensor, not the die, and is deliberately **never serialized** as `cpuTemp`; its local reading remains diagnostic-only (§5). Intel readings are integral; AMD readings have 0.125 °C resolution. |
+| `cpuWatts` | int | **W** (whole watts) | 0 – 1000 | **yes** before rounding (0 < x ≤ 1000) | 1 s | CPU package power from the Intel/AMD RAPL package-energy accumulator, averaged over the measured interval and rounded to whole watts. A tiny positive draw can round to `0`; that is a real rounded measurement. The first sample establishes a baseline and is absent; intervals outside 0.5–2 s are rejected, including the first tick after a long sleep, then the next normal interval self-heals. |
+| `cpuLimitW` | int | **W** (whole watts) | 1 – 1000 | **yes** before and after rounding (0 < x ≤ 1000) | session | Intel package power limit: PL1 from `MSR_PKG_POWER_LIMIT`, falling back to rated TDP from `MSR_PKG_POWER_INFO` if PL1 cannot be read, rounded to whole watts. A rounded zero is dropped. **Structurally absent on AMD**, whose bundled PawnIO module exposes package energy but no package power-limit register. Ambient: it does not trigger a datagram by itself (§7). |
+| `nvmeTemp` | **float** | °C | 0 – 150 | **yes** (0–150, NaN/∞ rejected) | 1 s | Temperature of the physical disk backing the Windows system volume. Primary source is `StorageDeviceTemperatureProperty` (whole °C); fallback is the NVMe health-log composite temperature (Kelvin converted to °C, normally ending in `.85`). Driver-dependent and absent for unsupported vendor/RAID/USB paths (§5). |
 | `ramUsed` | int (long) | **MiB** | ≥ 0 | no | 1 s | Physical RAM in use (total − available). |
 | `ramTotal` | int (long) | **MiB** | > 0 | no | 1 s | Total physical RAM (constant for the machine, still re-read per tick). |
 | `diskFree` | int (long) | **GiB** (1024³) | ≥ 0 | no | 1 s | Free space on the Windows system volume (usually `C:`). |
@@ -293,6 +305,10 @@ using values in layout math.
   so on real hardware it is integral (`40`). Sender tests pin fractional formatting
   (`62.5`) as legal, and the serializer uses shortest-round-trip float formatting —
   parse as double and do **not** assume a bound on fractional digits.
+- `cpuTemp` and `nvmeTemp` are also JSON floats. Intel CPU and tier-1 storage
+  readings are integral, AMD Tdie uses 0.125 °C steps, and the NVMe health-log
+  fallback converts whole Kelvin to Celsius. Parse all three temperature keys as
+  float/double; do not infer the provider from decimal formatting.
 - `clock` and `vramClock` are **different domains with different caps** (10000 and
   20000, both exclusive). A consumer sizing a field or a bar from `clock`'s 4 digits
   will clip `vramClock`, which legitimately uses 5.
@@ -336,6 +352,10 @@ Three failure lifetimes exist on the sender:
 | all GPU fields together | typically **two datagrams** | The driver handle was lost (driver restart, GPU reset). The sender requires **two consecutive** all-null sweeps before believing it. On the NVML backend every field is read every sweep, so both datagrams simply carry no GPU fields at all. On the NVAPI fallback the first one degrades *partially* — the per-sweep fields (`temp`, `load`, `clock`, `vramClock`) and any slower field that happened to be due are gone, while slower fields that were not due still carry their cached values — and the second drops the whole GPU set. Either way the handle is then released and its cached values discarded with it. The sweep after that normally re-acquires straight away (NVML first), and because the caches were cleared the full set returns at once. It lasts longer only when the handle is lost within ~5 s of having been acquired (re-acquisition waits out that window), or while re-acquisition itself keeps failing — ~5 s per attempt. |
 | `cpu` | session | Registry read failed, or nothing survived name cleaning. |
 | `cpuLoad` | per-tick *or* permanent | Transient: a PDH sample failed this tick (self-heals). Permanent: PDH is structurally unusable on that machine (counter can't be created) — then absent forever. Baseline is primed before the loop, so it is normally present from the first datagram. |
+| `cpuTemp` | per-tick *or* permanent/structural | Transient: the selected PawnIO die provider failed this read or rejected an implausible value. Permanent/structural: PawnIO is unavailable, neither signed module supports the CPU, or the app selected the ACPI thermal-zone fallback. **An ACPI reading is intentionally omitted even when locally available**, because it is a motherboard zone with different placement and lag; absence therefore means “no CPU die/package reading,” not “no temperature-like sensor exists.” |
+| `cpuWatts` | per-tick *or* permanent/structural | The first energy sample only establishes a baseline. Later transient absences mean the accumulator read failed, the elapsed interval fell outside 0.5–2 s (notably first tick after resume), or the result failed the 0–1000 W plausibility band; it retries next tick. Permanently absent when PawnIO/module/RAPL initialization is unavailable. |
+| `cpuLimitW` | session on Intel; **permanent/structural on AMD** | Intel reads PL1 once during provider initialization and falls back to the same one-shot TDP register; if neither answers, it remains absent for the session. The bundled AMD module exposes energy but no package-limit register, so absence on AMD is expected, not a fault. |
+| `nvmeTemp` | per-tick after a successful probe; otherwise session/permanent | The sender probes the system disk once. If neither the storage-temperature property nor the NVMe health log is supported, it latches unavailable for the session (common with vendor NVMe drivers, Intel RST/VMD, USB bridges and RAID). On a supported path, individual read failures or out-of-range values omit the key until a later tick succeeds. |
 | `ramUsed`/`ramTotal`, `diskFree` | per-tick | The OS call failed (rare). |
 | `diskTotal` | session | One-shot read failed (rare). |
 | `win` | session | Version registry key unreadable, or `CurrentBuild` was non-numeric. |
@@ -369,7 +389,8 @@ distinguish that from real zeros (`fan:0`, `reboot:0`, `load:0` are meaningful v
 
   | Field(s) | Read cadence | Worst-case age on the wire |
   |---|---|---|
-  | `cpuLoad`, `ramUsed`, `ramTotal`, `diskFree`, `up` | every tick | ~0 (read on the sending tick) |
+  | `cpuLoad`, `cpuTemp`, `cpuWatts`, `nvmeTemp`, `ramUsed`, `ramTotal`, `diskFree`, `up` | every tick | ~0 (read on the sending tick) |
+  | `cpuLimitW` | once during Intel provider initialization | the sender's whole uptime; never present on AMD |
   | **all GPU fields** (`gpu`, `temp`, `load`, `vram*`, `fan`, `power`, `watts`, `clock`, `vramClock`) — **NVML backend** | every sweep | < **0.95 s** (snapshot TTL) |
   | `limitW` | once per handle acquisition | the handle's lifetime — typically the sender's whole session |
   | `av`, `fw`, `reboot` | ≈ 60 s, best-effort | over a minute (a refresh is skipped while a previous one is still blocked) |
@@ -399,12 +420,13 @@ distinguish that from real zeros (`fan:0`, `reboot:0`, `load:0` are meaningful v
 A datagram is sent on a 1 s tick **only if at least one "live" metric is non-null**:
 
 - **Live metrics** (any one present ⇒ datagram sent): `temp`, `load`, `vramUsed`,
-  `vramTotal`, `fan`, `power`, `watts`, `clock`, `vramClock`, `cpuLoad`, `ramUsed`, `ramTotal`, `diskFree`, `diskTotal`.
+  `vramTotal`, `fan`, `power`, `watts`, `clock`, `vramClock`, `cpuLoad`, `cpuTemp`,
+  `cpuWatts`, `nvmeTemp`, `ramUsed`, `ramTotal`, `diskFree`, `diskTotal`.
 - **Ambient/identity fields** (never trigger a send by themselves; they ride along
   whenever a live metric makes the datagram worth sending): `gpu`, `host`, `cpu`,
-  `win`, `av`, `reboot`, `fw`, `up`, and (v5.12.0+) `limitW`. `limitW` is ambient for
-  the same reason the OS-health fields are: it is acquire-time state that is
-  practically always present on the NVML backend for the whole session, so counting it
+  `win`, `av`, `reboot`, `fw`, `up`, `limitW`, and `cpuLimitW`. The two limit fields
+  are ambient for the same reason the OS-health fields are: each is acquire-time state,
+  practically always present for the whole session on its supporting platform, so counting one
   as live would make this guard dead code there and let a names-and-limit payload blank
   the display's last-good screen when every real sensor fails.
 
@@ -461,8 +483,8 @@ render loop (independent):
 
 ### 8.2 Reference embedded consumer: ESP32 / ArduinoJson
 
-- RX buffer: ≥ **1024 bytes** (`char buf[1024]`; datagram ≤ 522 by contract — 502 bytes of slack; see §3.3). The reference ESP32's buffers were raised 496 → 1024 as part of the v5.12.0 renegotiation.
-- `JsonDocument` capacity: 1024 bytes is comfortably sufficient for the ≤ 24 keys of this size
+- RX buffer: ≥ **1024 bytes** (`char buf[1024]`; datagram ≤ 591 by contract — 433 bytes of slack; see §3.3). The reference ESP32's buffers were raised 496 → 1024 as part of the v5.12.0 renegotiation.
+- `JsonDocument` capacity: 1024 bytes is comfortably sufficient for the ≤ 28 keys of this size
   (ArduinoJson v6: `StaticJsonDocument<1024>`; v7 sizes dynamically).
 - ArduinoJson unescapes `\uXXXX` sequences automatically; decoded strings from v5.8.0+
   senders fit `char[64]` (`gpu`/`host`/`cpu`) and `char[17]` (`win`) — but always copy
@@ -485,6 +507,10 @@ struct Metrics {
   int?     vramClock;                  // MHz (up to 5 digits - wider than clock)
   long?    vramUsedMiB, vramTotalMiB;
   int?     cpuLoad;                    // %
+  float?   cpuTemp;                    // °C, die/package only (never ACPI zone)
+  int?     cpuWatts;                   // W, whole package power
+  int?     cpuLimitW;                  // W, Intel package limit; absent on AMD
+  float?   nvmeTemp;                   // °C, system NVMe disk
   long?    ramUsedMiB, ramTotalMiB;
   long?    diskFreeGiB, diskTotalGiB;
   int?     av;                         // 0|1|2
@@ -507,6 +533,9 @@ struct Metrics {
 | `limitW` | the enforced limit — scales an absolute-watts gauge exactly (`65 / 477 W`) instead of guessing a full-scale value. It is the **same** quantity `power` already encodes (`round(watts × 100 ÷ limitW)` reproduces `power` within ±1 count at desktop-class limits, ≳ 100 W; ±2 or worse on low-limit boards, where rounding both watt fields before dividing costs further counts — §4), so **draw ONE power bar, not two**; use `limitW` for the axis/label and fall back to `power`'s 0–100(–200) scale when it is absent (NVAPI-fallback senders, or a failed acquire-time read) |
 | `clock`/`vramClock` | MHz; typically shown side by side. Size the field for 5 digits — `vramClock` uses them |
 | `load`/`fan`/`cpuLoad` | clamp to 0–100 before drawing bars (`load`/`fan` are not sender-validated) |
+| `cpuTemp` | CPU die/package temperature; use CPU-specific thresholds rather than assuming the GPU `temp` colors fit every processor. Absent on ACPI-fallback machines by design — do not relabel another board sensor as CPU temperature |
+| `cpuWatts`/`cpuLimitW` | one CPU package-power gauge: show `cpuWatts / cpuLimitW W` when the Intel limit exists, otherwise show absolute `cpuWatts` alone. A missing `cpuLimitW` is normal on AMD |
+| `nvmeTemp` | system-disk temperature in °C; absent is common on unsupported storage-driver paths, so hide/grey the row rather than alarming |
 | `up` | format as `Nd HHh` / `HH:MM`; derive boot time as `now − up` only if NTP-synced |
 | VRAM/RAM | `used/total` in GB with one decimal: `value / 1024` |
 
@@ -527,8 +556,9 @@ A conforming consumer:
 8. ☐ Bound-checks every string copy regardless of the documented caps (pre-v5.7.1
    senders truncate nothing); ≥ 64-byte (`gpu`/`host`/`cpu`) and ≥ 17-byte (`win`)
    buffers suffice for v5.8.0+ senders.
-9. ☐ Parses `temp` as float/double with no assumed digit bound; all other numerics as
-   integers (use 64-bit for `up`, `ram*`, `vram*`, `disk*` to be safe).
+9. ☐ Parses `temp`, `cpuTemp` and `nvmeTemp` as float/double with no assumed digit
+   bound; all other numerics as integers (use 64-bit for `up`, `ram*`, `vram*`,
+   `disk*` to be safe).
 10. ☐ Clamps unvalidated numerics (`load`, `fan`, `vramUsed`/`vramTotal`, `ram*`,
     `disk*`) before using them in layout math, and sizes clock fields for the
     5 digits `vramClock` can carry.
@@ -542,10 +572,12 @@ A conforming consumer:
     drifts further still (§4). Never a second gauge beside the one `power` already drives.
 12. ☐ Implements a 5–10 s staleness timeout with last-good retention (no blanking on a
     single lost packet).
-13. ☐ Renders `av` per the tri-state table, including red for `2`.
-14. ☐ Tolerates interleaved datagrams from multiple hosts (keys off `host`, falling
+13. ☐ Treats missing `cpuTemp` as “no die/package reading” (including a deliberate
+    ACPI-fallback omission), and missing `cpuLimitW` as normal on AMD.
+14. ☐ Renders `av` per the tri-state table, including red for `2`.
+15. ☐ Tolerates interleaved datagrams from multiple hosts (keys off `host`, falling
     back to source IP for pre-v5.6.0 senders).
-15. ☐ Never replies to the sender — the protocol is strictly one-way. (The sender's
+16. ☐ Never replies to the sender — the protocol is strictly one-way. (The sender's
     socket does hold an ephemeral UDP port, but the app never reads from it; anything
     sent there is discarded.)
 
@@ -557,7 +589,7 @@ A conforming consumer:
 - Version probe: `{"v":2,"cpuLoad":5}` → ignored/flagged, not misrendered.
 - Legacy probe: `{"v":1,"gpu":"NVIDIA GeForce RTX 3060","temp":55,"load":10,"vramUsed":2048,"vramTotal":12288,"fan":30}` (a v5.5.0-shaped datagram, no host) → renders GPU data, keys off source IP.
 - Oversize-string probe: a datagram with a 100-byte `gpu` value (legal from pre-v5.7.1 senders) → string safely bounded, no overflow.
-- Boundary sizes: a **522-byte** datagram (v5.12.0 worst case, which is also the ceiling) must parse; the ≥ 1024-byte buffer floor leaves 502 bytes of slack, so a consumer sized to the floor has ample room for its own framing overhead — but must still not assume a fixed size.
+- Boundary sizes: a **591-byte** datagram (current worst case, which is also the ceiling) must parse; the ≥ 1024-byte buffer floor leaves 433 bytes of slack, so a consumer sized to the floor has ample room for its own framing overhead — but must still not assume a fixed size.
 
 ---
 
@@ -591,6 +623,10 @@ A conforming consumer:
   pile-up; `host`/`cpu`/`win`/`diskTotal` are read once per session; GPU metrics come
   from a shared snapshot cache (950 ms TTL) that dedupes the push loop, the GPU
   Monitor window and the tray menu into one sweep per second.
+- CPU die temperature, CPU package power and system-disk temperature are read on that
+  same 1 Hz tick; `cpuLimitW` is cached at Intel provider initialization. `cpuTemp` is
+  mapped only when `CpuTemperatureSource` is `IntelPackageMsr` or `AmdTctlSmn` — the
+  ACPI board-zone fallback remains diagnostic-only so wire provenance cannot drift.
 - **Two GPU backends, latched, never mixed per field** (v5.10.0+). The sweep acquires
   **NVML** (`Services/NvmlService.cs`, `nvml.dll`) first and falls back to **NVAPI**
   only if NVML will not initialize or will not hand out a device-0 handle; the choice is latched until the handle is dropped. Each
@@ -641,7 +677,7 @@ A conforming consumer:
 - Zero-impact is a hard project constraint: new fields must ride existing per-tick
   reads or slow caches. Adding any polling loop, timer, or per-tick syscall is a
   design regression — see `CLAUDE.md` and the v5.8.0 plan history.
-- The 522-byte budget is enforced by a **worst-case unit test**
+- The 591-byte budget is enforced by a **worst-case unit test**
   (`BuildPayloadJson_ShouldFitDatagramBudget_WhenEveryFieldIsAtItsWorstCase`), which asserts
   the exact byte count AND the constant, so the two cannot drift apart. Since v5.10.0 the
   push loop also **checks every datagram at runtime** (`NoteOversizeDatagram`, one integer
@@ -649,13 +685,15 @@ A conforming consumer:
   invalid JSON and dropping it would blank the display — but it logs one edge-triggered
   warning per oversize streak, so an overrun that escaped the unit test is findable in the
   field instead of silently truncating at a consumer's buffer.
-  The worst case still **equals** the ceiling (522/522, §3.3) — but the receiver floor was
-  renegotiated to ≥ 1024 in v5.12.0, so 502 bytes now sit between them. The next field is
+  The worst case still **equals** the ceiling (591/591, §3.3) — but the receiver floor was
+  renegotiated to ≥ 1024 in v5.12.0, so 433 bytes now sit between them. The next field is
   therefore a **sender-side change again**: raise the constant, re-pin the worst-case test
   and extend §3.3 in one commit; only a total approaching 1024 reopens the receiver contract.
-- Only `temp` (via `Constants.IsValidTemperature`, on both backends), `power`, `watts`
+- Only `temp`, `cpuTemp` and `nvmeTemp` (via `Constants.IsValidTemperature`), `power`, `watts`
   (< 2000 W), `limitW` (0 < x < 2000 — zero excluded, unlike `watts`), `clock` and
-  `vramClock` are range-validated before sending, and `cpuLoad`
+  `vramClock`, `cpuWatts` (0 < x ≤ 1000 before whole-watt rounding) and `cpuLimitW`
+  (the same band plus zero excluded after rounding)
+  are range-validated before sending, and `cpuLoad`
   is clamped to 0–100 (guarding the int cast; PDH already caps at 100); `av`/`fw` are
   mapped enumerations. Everything else is passed through as read. Note the validators
   **drop** an implausible value (key absent) rather than clamping it — including a
@@ -673,9 +711,9 @@ A conforming consumer:
   append to §3.1 and §4 here. A GPU-side field must also be produced on **both**
   backends (or be explicitly documented as absent on the fallback) and pick a
   `SampledMetric` cadence tier for the fallback. Do **not** bump `v` for additive
-  fields. **Budget check:** the v5.12.0 worst case is 522 of a 522 ceiling — no slack
+  fields. **Budget check:** the current worst case is 591 of a 591 ceiling — no slack
   there, so any new field means raising `MaxDatagramBytes` and re-pinning the worst-case
-  test in the same commit — but 502 bytes remain to the ≥ 1024-byte receiver-buffer
+  test in the same commit — but 433 bytes remain to the ≥ 1024-byte receiver-buffer
   floor, so that raise is a sender-side change and does not reopen the receiver
   contract until the total approaches 1024 (§3.3).
 
@@ -690,6 +728,8 @@ A conforming consumer:
 | `Services/NvmlService.cs` | The NVML interop layer itself: entry points, struct layouts, unit conversion at the boundary (bytes → MiB, raw milliwatts kept raw), per-getter null-on-failure, and the one-per-session edge-triggered diagnostic (never consumed by NOT_SUPPORTED) |
 | `Services/SampledMetric.cs` | The cadence primitive itself: session / every-sweep / interval sampling, latch-on-success for session reads, and the executed-read flags the handle-loss rule counts |
 | `Services/SystemMetricsService.cs` | CPU/RAM/disk/OS-health collection: PDH counter (primed baseline, latched structural failure), `GlobalMemoryStatusEx`, `DriveInfo`, Windows-version formatting (incl. `Srv` detection), WSC antivirus and firewall mapping (incl. S_FALSE→POOR), reboot-pending detection, background refresh with pile-up gate |
+| `Services/CpuTemperatureService.cs`, `Services/CpuTemperatureProviders.cs`, `Services/CpuPackagePowerProvider.cs` | CPU source selection and provenance, Intel package/AMD Tdie decoding, RAPL package draw and Intel-only package limit, including validation and absence behavior |
+| `Services/NvmeTemperatureService.cs` | System-volume-to-disk resolution, the two Windows storage temperature query tiers, validation and session latching |
 | `Services/LocalNetworkService.cs` | Local IPv4 selection (first up interface with an IPv4 gateway) that feeds address derivation |
 | `Constants.cs` | UDP port (4210), display host octet (99), discovery attempts/interval/ping timeout, temperature validation bounds (0–150 °C) |
 | `MetricsPusher.Tests/GpuDisplayPushServiceTests.cs` | The pinned wire contract: exact JSON, omission, truncation, budget worst-case |
@@ -698,4 +738,4 @@ A conforming consumer:
 
 ---
 
-*Document version: 1.16 (2026-08-11, sender MetricsPusher v1.0.0). v1.16: **first tagged release; two behavioural changes, no payload change.** The key set, the value shapes, the 522-byte budget and protocol `v: 1` are all untouched, and a consumer needs no change. **§3 now states the rule the changelog below had only ever implied:** the protocol version (`v`), the sender's release version, and this document's version are three independent numbers, none derivable from another, and only `v` is on the wire or says anything about compatibility. Two sender behaviours are newly recorded. (1) **§1.1 / §10: a destination is only derived on a private network** — RFC 1918, RFC 6598 CGNAT, or RFC 3927 link-local. This does not alter any datagram; it bounds *whether* one is sent, and only on a PC holding a non-private IPv4, where the trusted-subnet premise §10 rests on does not hold in the first place. Note that a LAN numbered outside those ranges (squat space such as `25/8`) now sends nothing where it previously sent. (2) The sender now loads `nvml.dll` **only** from an absolute `%WINDIR%\System32` path and will not search elsewhere for it, which closes a DLL search-order hijack. On a machine where NVML previously resolved from somewhere else — an old pre-R450 driver with `NVSMI\` on `PATH` — the sender falls back to NVAPI, which makes `watts` and `limitW` **structurally absent** exactly as §4 and §5 already describe for that backend; the absence is not new, but this is a new way to reach it. v1.15: **provenance, no wire change.** The sender was extracted from the originating multi-purpose tray app (v5.12.1) into MetricsPusher, a standalone tray app whose only job is this feed; the metrics and push code came across verbatim apart from namespaces, so **every byte of the contract below is unchanged** and protocol `v` stays `1`. Renamed `trayapp_metrics.md` → `push_metrics.md`. §11 and §12 re-pointed at the new file layout (`NetworkDiagService.cs` → `LocalNetworkService.cs`, `MetricsPusher.Tests/` → `MetricsPusher.Tests/`); the perf investigation log (`trayapp_perf.md`) stayed behind in the originating project and §11 now says so instead of linking it. High fidelity (§11) is no longer held by anything — the GPU Monitor window did not come across — so the NVAPI fallback's cadence tiers are now always in effect. Everything below this line describes the sender's history before the extraction. v1.14: accuracy pass, no wire change — the ±1 reconstruction bound stated in §2.1/§4/§8.4/§9 is now scoped to desktop-class enforced limits (≳ 100 W; on low-limit boards the double rounding of the two watt fields can drift a second count, so the cross-check is ±2 there — 20499 mW against a 35 W limit gives sender `59` against a wire reconstruction of `57`), and §4's `watts` row now says explicitly that its "never disagree" claim is about the sender's raw milliwatt pair, not the rounded wire values. **±2 is itself not a floor:** on very small or **fractional-watt** limits the limit's own rounding becomes a percent-scale denominator error that grows with load (a 34.5 W limit rounds to `34`, so a 39500 mW draw gives sender `114` against a reconstruction of `118`), so §4 and §9 tell a consumer to treat the cross-check as **advisory** rather than a bounded assertion there. No test changes: the pinned fixtures and the live capture are all desktop-class. v1.13: the new `limitW` field — the GPU's enforced power limit, the denominator `power` was already being divided by — joins the wire for **zero** new driver reads: the value was already cached at acquire time, so §11 records it as the one **exception** to the "a new GPU field costs one read method plus one registry line" rule (available only to data the sweep machinery already holds). §2.1 is a real v5.12.0 capture taken from the live NVML backend on an idle RTX 3090 Ti (338 bytes, `"limitW":477` immediately after `"watts":23`, `round(23 × 100 ÷ 477) = 5 = power`) — unlike the v5.10.0 example nothing in it is spliced, so it is a genuine second-tick datagram rather than a first-tick one. Worst-case datagram 508 → **522** and the ceiling raised with it (still equal, no slack there), but the **receiver floor was renegotiated ≥ 512 → ≥ 1024** after the reference ESP32's buffers went 496 → 1024, leaving 502 bytes of headroom — so the next field is a sender-side change again. `limitW` is **ambient** for the suppression guard (acquire-time state, always present on NVML) and validated **independently** of `power`/`watts` with a cap that **excludes zero**; it is **structurally absent on the NVAPI fallback**, like `watts`. Sections updated: §1–§9, §11, §12. Protocol `v` is NOT bumped: the field is additive and consumers ignore unknown keys. v1.12: two § corrections from the final re-review. §3.3's temperature note had it backwards: the pinned 508 is measured with a **6-byte fractional** `105.75`, so it already carries ~3 bytes more temperature than any real integral reading — that cushion is the load-bearing part, and the residual exposure is only a backend formatting wider than 6 bytes (validator-widest `149.12344` = 9), which would force a recomputation. §6: v1.11 removed `gpu` from the session row without re-homing it, leaving the only wire data key with no worst-case age; it is now in the NVML "all GPU fields" row and has its own session row in the fallback table, consistent with §4 and §5. No wire-visible change. v1.11: accuracy pass from the dedicated wire-contract audit before the v5.10.0 release build. §1.3 send failures also cover a disposed socket; §3.3 records that the 508 worst case assumes whole-degree temperatures (fractional would add ~3 bytes and force a recomputation, since nothing is left to absorb it); §4 gives `gpu` the same NVML/fallback cadence split the other rows have, notes that `watts` is the one thing the fallback cannot produce, and documents the validation asymmetry (a draw ≥ 2000 W is dropped while its ratio can still pass, and vice versa); §5 now names **three** failure lifetimes instead of two — per-tick, session-cached and permanent/structural (`watts` on fallback senders, `fan` on boards without an exposed fan) — which is what its own table always described; §6 harmonizes the snapshot-age prose with the strict `<` the freshness check uses; §8.2 corrects the key count 21 → 23; §11 adds `watts` to the validated-field list, states that NVML "will not initialize or hand out a device-0 handle" rather than "will not load", and records the **new runtime oversize-datagram guard** (edge-triggered warning, datagram still sent); §12 adds the watts cap. No wire-visible change — key set, value shapes and the 508 budget are untouched, so no protocol `v` bump. v1.10: correction — §4's `power` row still ended with "Watts are still not on the wire", contradicting the `watts` row directly beneath it in the same table; the clause was removed in the parallel `trayapp_perf.md` row but missed here. It now points at `watts` as the raw reading the percentage is derived from. No wire-visible change. v1.9: the new `watts` field (GPU board power draw in whole watts, own exclusive 2000 cap) publishes the raw reading the `power` percentage was already derived from — one NVML read, two fields, so they can never describe different instants; §2.1 recaptured, §3.1/§3.2 extended, **new §3.3** records the budget history and states plainly that the 496 → 508 renegotiation spent the margin (worst case now EQUALS the ceiling, 4 bytes under the ≥ 512-byte receiver floor, so the next field needs the reference consumer's buffer raised first), §4 gains the `watts` row, §5 documents its structural absence on NVAPI-fallback senders (unlike every other absence, which is transient) and that `watts` survives a failed enforced-limit read that suppresses `power`, §6/§7/§8.2/§8.3/§8.4/§9/§11 updated. Protocol `v` is NOT bumped: the field is additive and consumers ignore unknown keys. v1.8: accuracy pass after the v5.10.0 branch review — §4's `vramTotal` note claimed a backend difference that neither capture supports (both report `24564`); the real difference is in `vramUsed`, where NVML reports the driver's `used` and NVAPI computes `total − currentAvailableDedicated`, so the note moved to that row. §7.1: the startup availability probe now asks NVML when NVAPI declines, so machines only NVML can read (TCC/vGPU) send where they previously did not. No wire-visible change — the key set, the value shapes and the budget are untouched, so no protocol `v` bump. v1.7: the sender's GPU metrics now come from NVML with NVAPI as fallback, and the new `vramClock` (GPU memory clock, MHz, own 20000 cap) rides that change — §2.1 recaptured, §3.1/§3.2 extended, §4 gains the `vramClock` row plus backend-dependent cadences and the board-vs-chip `power` semantic note, §4.1 warns that the two clock fields have different digit widths, §5 splits the per-cadence absences by backend and documents the NOT_SUPPORTED fan and the session-cached power-limit denominator, §6 collapses to one GPU row on NVML with the fallback tiers kept as a second table, §7/§8.3/§8.4/§9 updated for the new field, §11 describes the backend model and the 495/496 budget, §12 adds `NvmlService.cs`. Protocol `v` is NOT bumped: the field is additive and consumers ignore unknown keys. v1.6: correction — §11's handle-loss bullet still stated the superseded one-strike rule, contradicting §5 and the sender code; it now describes the two-strike behavior (and why it is two) in §5's terms. §11 also links the perf investigation log (`trayapp_perf.md`) behind the cadence tiers. No wire-visible change. v1.5: accuracy pass after the v5.9.0 branch review — handle loss now takes two consecutive all-null sweeps, so §5's GPU-blackout row describes the two-step degradation it actually produces; §11 points at the shared private `BuildPayload` (not `BuildPayloadJson`) and notes that a new GPU field must pick a cadence tier; §12 covers `BuildPayloadUtf8`; sender version and the 13.15/16.4 ms share (80 %, was 78 %) corrected. v1.4: GPU reads are now cadence-tiered (`gpu` session, `temp`/`load`/`clock` every sweep, `vram*` 2 s, `fan`/`power` 3 s) and the snapshot TTL is 950 ms, not 500 — no field added, removed or retyped, so no protocol `v` bump; §4 cadences, §5 absence lifetimes, §6 staleness bounds (new per-field worst-case table), §11 sender behavior and §12 sources updated accordingly. v1.3: accuracy pass after a doc-vs-code verification — `fw` added to the §6 refresh-cadence and §10 security-posture lists, §11 validation summary now covers the `cpuLoad` clamp and `av`/`fw` mapping, §2.3 sender reference updated. v1.2: added the `fw` (Windows Firewall status) field; worst-case datagram 470 → 477 bytes. v1.1: 21 accuracy corrections and 8 additions after an independent doc-vs-code verification pass. Update this file in the same commit as any wire-visible change.*
+*Document version: 1.17 (2026-08-12, sender MetricsPusher next). v1.17: **four additive fields, protocol `v` remains `1`.** Added die/package-only `cpuTemp`, RAPL `cpuWatts`, Intel-only `cpuLimitW`, and system-disk `nvmeTemp`; the ACPI board-zone fallback is deliberately omitted from `cpuTemp`. The exact worst case and sender ceiling move 522 → **591** under the unchanged ≥ 1024-byte receiver floor. Updated §§3–9, §11 and §12. v1.16: **first tagged release; two behavioural changes, no payload change.** The key set, the value shapes, the 522-byte budget and protocol `v: 1` are all untouched, and a consumer needs no change. **§3 now states the rule the changelog below had only ever implied:** the protocol version (`v`), the sender's release version, and this document's version are three independent numbers, none derivable from another, and only `v` is on the wire or says anything about compatibility. Two sender behaviours are newly recorded. (1) **§1.1 / §10: a destination is only derived on a private network** — RFC 1918, RFC 6598 CGNAT, or RFC 3927 link-local. This does not alter any datagram; it bounds *whether* one is sent, and only on a PC holding a non-private IPv4, where the trusted-subnet premise §10 rests on does not hold in the first place. Note that a LAN numbered outside those ranges (squat space such as `25/8`) now sends nothing where it previously sent. (2) The sender now loads `nvml.dll` **only** from an absolute `%WINDIR%\System32` path and will not search elsewhere for it, which closes a DLL search-order hijack. On a machine where NVML previously resolved from somewhere else — an old pre-R450 driver with `NVSMI\` on `PATH` — the sender falls back to NVAPI, which makes `watts` and `limitW` **structurally absent** exactly as §4 and §5 already describe for that backend; the absence is not new, but this is a new way to reach it. v1.15: **provenance, no wire change.** The sender was extracted from the originating multi-purpose tray app (v5.12.1) into MetricsPusher, a standalone tray app whose only job is this feed; the metrics and push code came across verbatim apart from namespaces, so **every byte of the contract below is unchanged** and protocol `v` stays `1`. Renamed `trayapp_metrics.md` → `push_metrics.md`. §11 and §12 re-pointed at the new file layout (`NetworkDiagService.cs` → `LocalNetworkService.cs`, `MetricsPusher.Tests/` → `MetricsPusher.Tests/`); the perf investigation log (`trayapp_perf.md`) stayed behind in the originating project and §11 now says so instead of linking it. High fidelity (§11) is no longer held by anything — the GPU Monitor window did not come across — so the NVAPI fallback's cadence tiers are now always in effect. Everything below this line describes the sender's history before the extraction. v1.14: accuracy pass, no wire change — the ±1 reconstruction bound stated in §2.1/§4/§8.4/§9 is now scoped to desktop-class enforced limits (≳ 100 W; on low-limit boards the double rounding of the two watt fields can drift a second count, so the cross-check is ±2 there — 20499 mW against a 35 W limit gives sender `59` against a wire reconstruction of `57`), and §4's `watts` row now says explicitly that its "never disagree" claim is about the sender's raw milliwatt pair, not the rounded wire values. **±2 is itself not a floor:** on very small or **fractional-watt** limits the limit's own rounding becomes a percent-scale denominator error that grows with load (a 34.5 W limit rounds to `34`, so a 39500 mW draw gives sender `114` against a reconstruction of `118`), so §4 and §9 tell a consumer to treat the cross-check as **advisory** rather than a bounded assertion there. No test changes: the pinned fixtures and the live capture are all desktop-class. v1.13: the new `limitW` field — the GPU's enforced power limit, the denominator `power` was already being divided by — joins the wire for **zero** new driver reads: the value was already cached at acquire time, so §11 records it as the one **exception** to the "a new GPU field costs one read method plus one registry line" rule (available only to data the sweep machinery already holds). §2.1 is a real v5.12.0 capture taken from the live NVML backend on an idle RTX 3090 Ti (338 bytes, `"limitW":477` immediately after `"watts":23`, `round(23 × 100 ÷ 477) = 5 = power`) — unlike the v5.10.0 example nothing in it is spliced, so it is a genuine second-tick datagram rather than a first-tick one. Worst-case datagram 508 → **522** and the ceiling raised with it (still equal, no slack there), but the **receiver floor was renegotiated ≥ 512 → ≥ 1024** after the reference ESP32's buffers went 496 → 1024, leaving 502 bytes of headroom — so the next field is a sender-side change again. `limitW` is **ambient** for the suppression guard (acquire-time state, always present on NVML) and validated **independently** of `power`/`watts` with a cap that **excludes zero**; it is **structurally absent on the NVAPI fallback**, like `watts`. Sections updated: §1–§9, §11, §12. Protocol `v` is NOT bumped: the field is additive and consumers ignore unknown keys. v1.12: two § corrections from the final re-review. §3.3's temperature note had it backwards: the pinned 508 is measured with a **6-byte fractional** `105.75`, so it already carries ~3 bytes more temperature than any real integral reading — that cushion is the load-bearing part, and the residual exposure is only a backend formatting wider than 6 bytes (validator-widest `149.12344` = 9), which would force a recomputation. §6: v1.11 removed `gpu` from the session row without re-homing it, leaving the only wire data key with no worst-case age; it is now in the NVML "all GPU fields" row and has its own session row in the fallback table, consistent with §4 and §5. No wire-visible change. v1.11: accuracy pass from the dedicated wire-contract audit before the v5.10.0 release build. §1.3 send failures also cover a disposed socket; §3.3 records that the 508 worst case assumes whole-degree temperatures (fractional would add ~3 bytes and force a recomputation, since nothing is left to absorb it); §4 gives `gpu` the same NVML/fallback cadence split the other rows have, notes that `watts` is the one thing the fallback cannot produce, and documents the validation asymmetry (a draw ≥ 2000 W is dropped while its ratio can still pass, and vice versa); §5 now names **three** failure lifetimes instead of two — per-tick, session-cached and permanent/structural (`watts` on fallback senders, `fan` on boards without an exposed fan) — which is what its own table always described; §6 harmonizes the snapshot-age prose with the strict `<` the freshness check uses; §8.2 corrects the key count 21 → 23; §11 adds `watts` to the validated-field list, states that NVML "will not initialize or hand out a device-0 handle" rather than "will not load", and records the **new runtime oversize-datagram guard** (edge-triggered warning, datagram still sent); §12 adds the watts cap. No wire-visible change — key set, value shapes and the 508 budget are untouched, so no protocol `v` bump. v1.10: correction — §4's `power` row still ended with "Watts are still not on the wire", contradicting the `watts` row directly beneath it in the same table; the clause was removed in the parallel `trayapp_perf.md` row but missed here. It now points at `watts` as the raw reading the percentage is derived from. No wire-visible change. v1.9: the new `watts` field (GPU board power draw in whole watts, own exclusive 2000 cap) publishes the raw reading the `power` percentage was already derived from — one NVML read, two fields, so they can never describe different instants; §2.1 recaptured, §3.1/§3.2 extended, **new §3.3** records the budget history and states plainly that the 496 → 508 renegotiation spent the margin (worst case now EQUALS the ceiling, 4 bytes under the ≥ 512-byte receiver floor, so the next field needs the reference consumer's buffer raised first), §4 gains the `watts` row, §5 documents its structural absence on NVAPI-fallback senders (unlike every other absence, which is transient) and that `watts` survives a failed enforced-limit read that suppresses `power`, §6/§7/§8.2/§8.3/§8.4/§9/§11 updated. Protocol `v` is NOT bumped: the field is additive and consumers ignore unknown keys. v1.8: accuracy pass after the v5.10.0 branch review — §4's `vramTotal` note claimed a backend difference that neither capture supports (both report `24564`); the real difference is in `vramUsed`, where NVML reports the driver's `used` and NVAPI computes `total − currentAvailableDedicated`, so the note moved to that row. §7.1: the startup availability probe now asks NVML when NVAPI declines, so machines only NVML can read (TCC/vGPU) send where they previously did not. No wire-visible change — the key set, the value shapes and the budget are untouched, so no protocol `v` bump. v1.7: the sender's GPU metrics now come from NVML with NVAPI as fallback, and the new `vramClock` (GPU memory clock, MHz, own 20000 cap) rides that change — §2.1 recaptured, §3.1/§3.2 extended, §4 gains the `vramClock` row plus backend-dependent cadences and the board-vs-chip `power` semantic note, §4.1 warns that the two clock fields have different digit widths, §5 splits the per-cadence absences by backend and documents the NOT_SUPPORTED fan and the session-cached power-limit denominator, §6 collapses to one GPU row on NVML with the fallback tiers kept as a second table, §7/§8.3/§8.4/§9 updated for the new field, §11 describes the backend model and the 495/496 budget, §12 adds `NvmlService.cs`. Protocol `v` is NOT bumped: the field is additive and consumers ignore unknown keys. v1.6: correction — §11's handle-loss bullet still stated the superseded one-strike rule, contradicting §5 and the sender code; it now describes the two-strike behavior (and why it is two) in §5's terms. §11 also links the perf investigation log (`trayapp_perf.md`) behind the cadence tiers. No wire-visible change. v1.5: accuracy pass after the v5.9.0 branch review — handle loss now takes two consecutive all-null sweeps, so §5's GPU-blackout row describes the two-step degradation it actually produces; §11 points at the shared private `BuildPayload` (not `BuildPayloadJson`) and notes that a new GPU field must pick a cadence tier; §12 covers `BuildPayloadUtf8`; sender version and the 13.15/16.4 ms share (80 %, was 78 %) corrected. v1.4: GPU reads are now cadence-tiered (`gpu` session, `temp`/`load`/`clock` every sweep, `vram*` 2 s, `fan`/`power` 3 s) and the snapshot TTL is 950 ms, not 500 — no field added, removed or retyped, so no protocol `v` bump; §4 cadences, §5 absence lifetimes, §6 staleness bounds (new per-field worst-case table), §11 sender behavior and §12 sources updated accordingly. v1.3: accuracy pass after a doc-vs-code verification — `fw` added to the §6 refresh-cadence and §10 security-posture lists, §11 validation summary now covers the `cpuLoad` clamp and `av`/`fw` mapping, §2.3 sender reference updated. v1.2: added the `fw` (Windows Firewall status) field; worst-case datagram 470 → 477 bytes. v1.1: 21 accuracy corrections and 8 additions after an independent doc-vs-code verification pass. Update this file in the same commit as any wire-visible change.*

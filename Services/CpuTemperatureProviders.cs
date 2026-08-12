@@ -8,13 +8,12 @@ using System.Security.Principal;
 namespace MetricsPusher.Services
 {
     /// <summary>
-    /// Where a CPU temperature came from. Carried from day one even though nothing
-    /// consumes it yet, because the three sources are not the same physical quantity: an
+    /// Where a CPU temperature came from. Carried into the wire mapping because the three
+    /// sources are not the same physical quantity: an
     /// Intel package MSR and an AMD Tdie are die temperatures, while an ACPI thermal zone
     /// is whatever board sensor the firmware chose to expose - typically lower, laggier
-    /// and on some machines a constant. A future <c>cpuTemp</c> wire field has to be able
-    /// to say which of those it is shipping, and adding the discriminator afterwards would
-    /// mean a consumer had already assumed.
+    /// and on some machines a constant. The <c>cpuTemp</c> wire field accepts only the two
+    /// die sources and deliberately omits the ACPI fallback.
     /// </summary>
     internal enum CpuTemperatureSource
     {
@@ -39,7 +38,7 @@ namespace MetricsPusher.Services
     /// </summary>
     internal interface ICpuTemperatureProvider : IDisposable
     {
-        /// <summary>Source of the reading, for logging and a future wire field.</summary>
+        /// <summary>Source of the reading, for logging and the die-only wire mapping.</summary>
         CpuTemperatureSource Source { get; }
 
         /// <summary>

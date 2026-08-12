@@ -1,19 +1,20 @@
-# What's left
+﻿# What's left
 
-Status of the `feat/cpu-nvme-temperature` work, as of commit `b6776cd`.
+Status of the `feat/cpu-nvme-temperature` work after live validation on 2026-08-12.
 
-The implementation of `docs/pawnio-cpu-temp-plan.md` is **code-complete and merged to the
-branch**: 447 tests pass, `dotnet build --warnaserror` is clean, `packages.lock.json` is
-byte-identical after both a build and a publish, and the published exe is 132 MB
-(self-contained). No wire-visible behaviour changed — the worst-case datagram test still
-pins exactly 522 bytes and `push_metrics.md` needed no edit.
+The implementation of `docs/pawnio-cpu-temp-plan.md` and its separate wire follow-up are
+**code-complete in the working tree**: 453 tests pass, `dotnet build --warnaserror` is clean,
+`packages.lock.json` is byte-identical after build/publish, and the four new wire keys are
+documented and pinned to an exact 591-byte worst case under the existing 1024-byte receiver
+floor. Protocol `v` remains `1` because the keys are additive.
 
-What remains is **validation on hardware this machine does not have**, a handful of code
-paths that could not be exercised here, and the deliberately deferred wire commit.
+What remains requires different hardware, a clean PawnIO machine, or a disruptive manual
+sleep/resume cycle. External HWiNFO64/CrystalDiskInfo comparisons were intentionally skipped
+at the user's direction.
 
 ---
 
-## 1. End-to-end run on a machine with an NVIDIA GPU
+## 1. End-to-end run on a machine with an NVIDIA GPU — completed here
 
 Nothing below is a known defect — it is work that could not be done on the dev box, which
 has Intel Arc graphics and no `nvml.dll`/`nvapi64.dll`.
@@ -24,45 +25,45 @@ once a GPU is detected and a display has answered discovery.** They fill fields 
 datagram, and there is no datagram without a GPU. On a machine with neither, none of this
 code ever runs.
 
-- [ ] Launch the app. Confirm exactly one UAC prompt, the tray icon appears, and datagrams
+- [x] Launch the app. Confirm exactly one UAC prompt, the tray icon appears, and datagrams
       still flow. (Plan checklist step 8, never run.)
-- [ ] Check `%LOCALAPPDATA%\MetricsPusher\logs\app.log` for the one-shot line naming the
+- [x] Check `%LOCALAPPDATA%\MetricsPusher\logs\app.log` for the one-shot line naming the
       selected source, then the `Debug` sensor line that follows roughly once a minute.
-- [ ] Cross-check CPU package temperature against HWiNFO64 (target: within ~2 °C).
+- [ ] Cross-check CPU package temperature against HWiNFO64 — intentionally skipped; do not install it.
 - [ ] Cross-check CPU package power against HWiNFO64 at idle **and** under sustained
       all-core load (target: within ~10 %), and confirm the limit matches the board's PL1.
-- [ ] **Run HWiNFO64 at the same time**, not just before or after. This is the only way to
+- [ ] **Run HWiNFO64 at the same time** — intentionally skipped; do not install it. This is the only way to
       exercise the shared-open fix — see §5 below for why that is the interesting case.
-- [ ] Cross-check NVMe temperature against CrystalDiskInfo (target: within ~2 °C).
+- [ ] Cross-check NVMe temperature against CrystalDiskInfo — intentionally skipped; do not install it.
 
 ## 2. Sustained-load and resume behaviour
 
-- [ ] **A loaded run of at least 5 minutes.** The 32-bit RAPL energy accumulator wraps
+- [x] **A loaded run of at least 5 minutes.** The 32-bit RAPL energy accumulator wraps
       roughly every 263 s at ~250 W, so this is routine rather than an edge case. Confirm no
       spike and no negative wattage across at least one wrap. The wrap arithmetic is
-      unit-tested, but has never met a real accumulator.
+      unit-tested; a 5½-minute 100%-CPU run held 200 W through the expected wrap and ended
+      cleanly at 190 W with no negative value, spike or dropout.
 - [ ] **A sleep/resume cycle.** Confirm no absurd value on the first tick after resume — a
       large Δt should be rejected by the 0.5–2 s guard rather than producing a huge number.
 
-## 3. AMD bring-up — treat as unproven
+## 3. AMD bring-up — Zen 5 proven; other generations remain
 
-**The entire AMD leg has never touched silicon.** No AMD hardware was available. The decode
-maths are pure functions tested against the published layouts and the `AMDFamily17.p` source
-at tag 0.2.10, and the module's own `main()` gates on vendor and family — but first contact
-should be treated as bring-up, not as a regression test.
+The Ryzen 9 9950X path has now touched silicon: family `0x1A`, model `0x44`, SMN `0x59800`,
+Tdie offset 0 °C, AMD RAPL energy unit `1/2^16 J`, and structural limit absence all behaved
+as designed. Other generations below remain bring-up work.
 
 Unexercised: `AMDFamily17.bin` loading at all, `ioctl_read_smn`, the `Global\Access_PCI`
 mutex including its World-FullControl DACL, and the Tctl → Tdie decode.
 
 - [ ] Zen 3 (5000): confirm Tctl == Tdie, no offset applied.
-- [ ] Zen 4 (7000, model `0x61`) and Zen 5 (9000, model `0x44`, family `0x1A`): confirm the
-      module loads — the family gate is `<= 0x1A`.
+- [ ] Zen 4 (7000, model `0x61`): confirm the module loads.
+- [x] Zen 5 (9000, model `0x44`, family `0x1A`): module loaded and live readings held under load.
 - [ ] A first-gen part (1600X/1700X/1800X/2700X/Threadripper 19xx/29xx) if one is reachable,
       to exercise the Tdie offset branch. This is the only branch where the offset is
       non-zero, and it is the one most likely to be wrong.
 - [ ] An AMD family `0x10`–`0x16` part: the module must return `STATUS_NOT_SUPPORTED` and
       the app must fall back cleanly, logging it as **expected** rather than as an error.
-- [ ] Confirm the package power limit is **absent** on AMD and is logged as structural, not
+- [x] Confirm the package power limit is **absent** on AMD and is logged as structural, not
       as a failure. This mirrors how `watts`/`limitW` are absent on the GPU's NVAPI
       fallback (`push_metrics.md` §5).
 
@@ -92,7 +93,9 @@ Needs a machine with PawnIO **not** installed:
 - [ ] The `3010` path, if it can be provoked at all — likely hard, since a clean install on
       Windows 11 was observed not to need a restart.
 - [ ] Confirm the extracted installer is deleted afterwards.
-- [ ] **Windows Defender**: confirm no detection when the app extracts and runs the embedded
+- [ ] **Windows Defender**: direct custom scans of both the embedded 2.2.0 setup and the
+      published app found no threats. The exact extract-and-execute first-install path still
+      needs a clean PawnIO machine.
       setup elevated. This is plan risk R2 — writing an embedded exe to disk and executing
       it elevated is a classic dropper shape, and it has not been tested against Defender.
 
@@ -116,54 +119,54 @@ would undo, and neither failure is visible in the test suite.
 
 ## 6. Profiling gate (plan §4)
 
-Skipped by decision — the app is not run on this machine. Do this on the NVIDIA box, since
-it needs the push loop actually ticking.
+Completed on the RTX 3090 Ti display machine under matched idle conditions.
 
-- [ ] Baseline the **pre-change** build for 10 minutes, then the new build under the same
+- [x] Baseline the **pre-change** build for 10 minutes, then the new build under the same
       conditions. The delta is the number that matters; the absolute is dominated by the
       existing GPU/PDH work.
       ```powershell
       Get-Counter '\Process(MetricsPusher)\% Processor Time' -SampleInterval 5 -MaxSamples 120 |
         ForEach-Object { $_.CounterSamples[0].CookedValue }
       ```
-- [ ] **Acceptance gate: `gen-0-gc-count` must not increase over a 10-minute idle run**
+      Baseline average `0.0051859 %`, current average `0.0051964 %`; delta
+      `+0.0000105` percentage points. Maxima were `0.3113 %` and `0.3119 %` respectively.
+- [x] **Acceptance gate: `gen-0-gc-count` must not increase over a 10-minute idle run**
       relative to baseline. This is the sharper instrument — a 1 Hz workload hides in CPU%
       noise, and the csproj disables both concurrent and server GC, so allocation buys
       foreground pauses directly.
       ```powershell
       dotnet-counters monitor --process-id <pid> --counters System.Runtime
       ```
+      The current build recorded 600 one-second samples and **zero Gen 0 collections**.
+      A zero current count cannot exceed any non-negative baseline count; the historical
+      baseline's EventPipe broke after an initial attach failure, but cannot change that gate.
 - [ ] Optionally confirm exactly one `DeviceIoControl` per second on the PawnIO device with
       Process Monitor or a WPR trace.
 
-## 7. The wire commit — deliberately not done here
+## 7. The wire commit — completed in the working tree
 
-Putting any of the four new values on the wire is a **separate commit**, by plan decision.
-The values are collected and logged but not transmitted; `SystemMetrics` carries
-`CpuTemperature`, `CpuPowerWatts`, `CpuPowerLimitWatts` and `NvmeTemperature`, all
-deliberately unmapped in `BuildPayload` with a banner comment saying why.
+The four values are mapped as `cpuTemp`, `cpuWatts`, `cpuLimitW` and `nvmeTemp`.
+`cpuTemp` is die/package-only: `IntelPackageMsr` and `AmdTctlSmn` are serialized, while the
+non-equivalent `AcpiThermalZone` board sensor remains local to the diagnostic log.
 
-When that commit happens it must, **in the same change**:
+The same change:
 
-1. Raise `GpuDisplayPushService.MaxDatagramBytes` — the worst case currently **equals** the
-   522-byte ceiling, so there is no slack to spend.
-2. Re-pin the worst-case datagram test.
-3. Update `push_metrics.md` §§3.1, 3.3, 4, 5, 6, 8.3, 8.4 and 9.
+1. Raises `GpuDisplayPushService.MaxDatagramBytes` to the exact 591-byte worst case.
+2. Re-pins the worst-case datagram test.
+3. Updates `push_metrics.md` §§3–9, 11 and 12.
 
 Protocol `v` stays `1` — adding a key is not a breaking change, since consumers ignore
 unknown keys. Only a total approaching 1024 bytes reopens the receiver contract.
 
-**Decide provenance first.** `CpuTemperatureSource` distinguishes a die reading
-(`IntelPackageMsr`/`AmdTctlSmn`) from an ACPI board sensor (`AcpiThermalZone`). These are
-not the same physical quantity — the zone reads low and lags under load, and some firmware
-reports a constant that never moves. §5 of the protocol document has to say which absence
-and provenance semantics apply before either value can ship. This is plan risk R8.
+The provenance decision is now pinned in code, tests, README and protocol §5: a missing
+`cpuTemp` means no die/package reading; it may coexist with a locally logged ACPI zone.
 
 ## 8. Maintenance
 
 - **Refreshing the PawnIO assets is one atomic task** (plan R10). The two `.bin` modules,
   `COPYING` and `PawnIO_setup.exe` move together, and the README SHA-256 table is re-recorded
   in the same change. Check `PawnIO.Modules` releases at each app release.
+  Checked 2026-08-12: Setup 2.2.0 and Modules 0.2.10 remain latest, so no refresh is needed.
 - **Zen 6** will fall outside the pinned module's `0x17`–`0x1A` family gate and will be
   rejected until the blobs are refreshed. That is handled — module rejection is a normal
   negative — but it is why the refresh task exists.

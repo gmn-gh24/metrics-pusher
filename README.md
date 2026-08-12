@@ -1,4 +1,4 @@
-# MetricsPusher
+﻿# MetricsPusher
 
 MetricsPusher is a lightweight Windows tray application that sends hardware and system
 metrics to a display panel on the local network once per second over UDP. It has no
@@ -12,8 +12,8 @@ kernel driver on first run — both are explained below.
 - **Administrator rights** — the app shows a UAC prompt every time it starts, see below
 - An NVIDIA GPU for GPU metrics
 - A display receiver on the supported local network
-- Optional: the PawnIO kernel driver, which is needed for CPU die temperature and nothing
-  else
+- Optional: the PawnIO kernel driver, which is needed for CPU die temperature and package
+  power
 
 ## Administrator rights
 
@@ -143,27 +143,33 @@ query. It needs no driver and no elevation, but it is not universal:
   temperature. A genuinely sub-zero drive — a cold boot in an unheated room — therefore
   reports nothing rather than a negative number. That is deliberate.
 
-None of these four values is on the UDP wire in this version; they are read and logged only.
-See [push_metrics.md](push_metrics.md) for what is actually sent.
+The UDP payload publishes die/package CPU temperature as `cpuTemp`, package draw as
+`cpuWatts`, the Intel-only package limit as `cpuLimitW`, and system-disk temperature as
+`nvmeTemp`. The ACPI board-zone fallback is still logged locally but is deliberately omitted
+from `cpuTemp`, so that key never changes physical meaning by machine. See
+[push_metrics.md](push_metrics.md) for exact ranges and absence semantics.
 
 ## What has and has not been tested
 
-The CPU sensors were verified on one machine only — an Intel Core Ultra 7 155H running
-Windows 11 — where the following were confirmed against real hardware: opening the PawnIO
+The CPU sensors were verified on Intel Core Ultra 7 155H and AMD Ryzen 9 9950X machines
+running Windows 11. Intel validation confirmed opening the PawnIO
 device, loading the Intel module, reading TjMax (110 °C on that part), decoding the package
 temperature, deriving 10.05 W package power from the RAPL energy accumulator, the correctly
 scaled 28 W TDP and 64 W PL1 limits, the driver refusing a register outside the module's
-allow-list, and NVMe drive temperature working without elevation.
+allow-list, and NVMe drive temperature working without elevation. Zen 5 validation confirmed
+the family `0x1A`/model `0x44` module gate, SMN Tdie with zero offset, AMD RAPL package power,
+structural absence of a package limit, and a 5½-minute 100%-CPU run holding 200 W cleanly
+across the expected 32-bit accumulator-wrap interval.
 
 Not verified, and stated plainly rather than implied:
 
-- **The entire AMD path.** No AMD hardware was available, so the AMD module, the Tctl/Tdie
-  decode and the PCI-mutex handling around it have never been exercised.
+- Other AMD generations remain unverified: Zen 3/4 and the first-generation non-zero Tdie
+  offset branch, plus the expected-not-supported fallback on family `0x10`–`0x16`.
 - **The silent install exit code.** PawnIO was installed interactively during development,
   so the `-install -silent` exit code was never observed. A clean 2.2.0 install on Windows
   11 did **not** ask for a restart, so the reboot-required path is not one a normal first
   install is expected to take — but the code still handles it, untested.
-- The application has not been run end to end on that machine with these changes.
+- Sleep/resume behavior has not been exercised on hardware.
 
 ## Is .NET required?
 

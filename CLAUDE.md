@@ -1,4 +1,8 @@
-﻿# MetricsPusher
+﻿# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+# MetricsPusher
 
 A Windows tray application whose only job is to push hardware metrics to a display panel
 on the local subnet: one JSON UDP datagram per second, fire-and-forget. There is a tray
@@ -12,7 +16,7 @@ see `push_metrics.md`, which is authoritative for anything on the wire.
 
 ```powershell
 dotnet build --warnaserror     # must be clean - StyleCop + Roslynator + CA5392 are enforced
-dotnet test                    # 453 tests
+dotnet test
 dotnet test --filter "FullyQualifiedName~GpuDisplayPushServiceTests"
 
 # Portable single-file exe (~130 MB, no .NET prerequisite on the target machine)
@@ -56,6 +60,11 @@ Logs: `%LOCALAPPDATA%\MetricsPusher\logs\app.log` (10 MB, rotates to `.1`–`.3`
 | `Services/CpuPackagePowerProvider.cs` | RAPL energy accumulator → watts, plus the Intel-only package power limit |
 | `Services/NvmeTemperatureService.cs` | System-disk temperature via `IOCTL_STORAGE_QUERY_PROPERTY`. No driver, no elevation, no PawnIO |
 | `Services/PawnIoInstaller.cs` | Presence probe, the one-time consent prompt, extract-and-run the bundled setup |
+| `Services/LoggingService.cs` | The single log sink. Collapses consecutive identical lines; opens the file `FileShare.ReadWrite` so a second same-user instance can write too |
+| `Constants.cs` | Mutex name, the display UDP port (4210) and host octet (99), discovery attempt/interval budget, temperature sanity bounds |
+| `MetricsPusher.Tests/` | xunit; one file per service, reaching internals via `InternalsVisibleTo`. `ProcessGlobalCollection.cs` serializes tests that touch process-wide state |
+| `docs/` | `pawnio-cpu-temp-plan.md` (the implemented design for the CPU/NVMe work) and `pawnio-phase0-findings.md` (the measurements it rests on) |
+| `WHATSLEFT.md` | Validation the dev box cannot do — other AMD generations, sleep/resume, a clean-machine PawnIO install. Read it before claiming a sensor path is proven; some items are deliberately skipped, not pending |
 | `Resources/PawnIo/` | The two embedded signed modules (`IntelMSR.bin`, `AMDFamily17.bin`) and their `COPYING`; `Resources/PawnIO_setup.exe` is the bundled 2.2.0 installer |
 | `push_metrics.md` | Authoritative UDP wire protocol. Update it in the same change as any wire-visible change |
 | `README.md` | User-facing: requirements, publish, **where to install it and why** |
@@ -162,3 +171,7 @@ pass cleanly. `.editorconfig` mandates CRLF line endings.
 The services under `Services/` are a verbatim extraction carrying hard-won behavior
 (handle-loss strike counting, latched legacy-API fallbacks, backend splits). Do not
 "clean them up" — changes there risk changing what goes on the wire.
+
+Sensor cross-checks against HWiNFO64 and CrystalDiskInfo are **not** to be run: the user
+declined those tools, so do not install or suggest them. `WHATSLEFT.md` marks those items
+skipped rather than outstanding.

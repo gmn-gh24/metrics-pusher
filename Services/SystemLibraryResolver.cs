@@ -31,9 +31,9 @@ namespace MetricsPusher.Services
     {
         /// <summary>
         /// The libraries to pin, spelled as the runtime asks for them - which is the name in
-        /// the <c>DllImport</c>, extension or not. <c>nvml</c>, <c>pdh</c> and <c>wscapi</c>
-        /// come from this assembly; <c>nvapi64</c> comes from NvAPIWrapper's own import table,
-        /// which declares it without the extension.
+        /// the <c>DllImport</c>, extension or not. <c>nvml</c>, <c>pdh</c>, <c>wscapi</c> and
+        /// <c>iphlpapi</c> come from this assembly; <c>nvapi64</c> comes from NvAPIWrapper's
+        /// own import table, which declares it without the extension.
         /// <para>
         /// <c>kernel32</c> is deliberately absent: it is a KnownDLL, so the loader maps the
         /// already-resolved section and never searches for it. <c>nvapi</c> (the 32-bit half
@@ -42,7 +42,7 @@ namespace MetricsPusher.Services
         /// in System32 anyway.
         /// </para>
         /// </summary>
-        private static readonly string[] GuardedLibraries = { "nvml", "pdh", "wscapi", "nvapi64" };
+        private static readonly string[] GuardedLibraries = { "nvml", "pdh", "wscapi", "nvapi64", "iphlpapi" };
 
         /// <summary>
         /// Registers the resolver for this assembly and for NvAPIWrapper's. Must run before

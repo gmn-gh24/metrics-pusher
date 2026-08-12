@@ -14,6 +14,7 @@ namespace MetricsPusher.Tests
         [InlineData("nvml.dll")]      // Spelled with the extension by NvmlService
         [InlineData("pdh.dll")]
         [InlineData("wscapi.dll")]
+        [InlineData("iphlpapi.dll")]  // NetworkThroughputService's GetIfEntry2
         [InlineData("nvapi64")]       // Spelled WITHOUT it by NvAPIWrapper's import table
         public void IsGuarded_ShouldReturnTrue_ForEveryLibraryTheAppPInvokes(string libraryName)
         {
@@ -65,13 +66,14 @@ namespace MetricsPusher.Tests
         [Theory]
         [InlineData("pdh.dll")]
         [InlineData("wscapi.dll")]
+        [InlineData("iphlpapi.dll")]
         public void ResolveSystem32Path_ShouldProduceAPathThatActuallyLoads(string libraryName)
         {
-            // The paths for the two libraries Windows always ships are checked for real: a
+            // The paths for the three libraries Windows always ships are checked for real: a
             // resolver that pins to a WRONG path does not fail loudly, it silently costs the
-            // CPU counter and the antivirus/firewall fields. nvml and nvapi64 are excluded -
-            // they exist only where an NVIDIA driver is installed, which no build machine
-            // can be assumed to have.
+            // CPU counter, the antivirus/firewall fields and the network metrics. nvml and
+            // nvapi64 are excluded - they exist only where an NVIDIA driver is installed,
+            // which no build machine can be assumed to have.
             string path = SystemLibraryResolver.ResolveSystem32Path(libraryName);
 
             Assert.True(File.Exists(path), $"{path} should exist on any Windows install");

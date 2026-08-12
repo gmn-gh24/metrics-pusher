@@ -99,6 +99,29 @@ namespace MetricsPusher.Services
         [JsonPropertyName("diskTotal")]
         public long? DiskTotal { get; set; }
 
+        /// <summary>
+        /// Primary network adapter description (make/model, trademark marks stripped),
+        /// e.g. "Intel Ethernet Controller I225-V" (static per session).
+        /// </summary>
+        [JsonPropertyName("netName")]
+        public string? NetName { get; set; }
+
+        /// <summary>Primary adapter media type: 0 = Ethernet, 1 = Wi-Fi, 2 = other (static per session).</summary>
+        [JsonPropertyName("netType")]
+        public int? NetType { get; set; }
+
+        /// <summary>Negotiated link speed in Mbps (re-read every tick, so a renegotiation self-heals).</summary>
+        [JsonPropertyName("netLink")]
+        public int? NetLink { get; set; }
+
+        /// <summary>Receive throughput in kbit/s, averaged over the measured ~1 s interval.</summary>
+        [JsonPropertyName("netRx")]
+        public long? NetRx { get; set; }
+
+        /// <summary>Transmit throughput in kbit/s, averaged over the measured ~1 s interval.</summary>
+        [JsonPropertyName("netTx")]
+        public long? NetTx { get; set; }
+
         /// <summary>Windows version, e.g. "11 23H2" (static per session).</summary>
         [JsonPropertyName("win")]
         public string? Win { get; set; }
@@ -125,7 +148,7 @@ namespace MetricsPusher.Services
     /// Discovery: pings the display address once per minute for up to
     /// <see cref="Constants.DisplayDiscoveryAttempts"/> attempts; first reply freezes
     /// the endpoint for the session, exhaustion disables the feature until restart.
-    /// Push: one ~415-byte (≤591) JSON datagram per second. Never throws, never blocks.
+    /// Push: one ~515-byte (≤732) JSON datagram per second. Never throws, never blocks.
     /// </summary>
     internal static class GpuDisplayPushService
     {
@@ -158,20 +181,21 @@ namespace MetricsPusher.Services
         /// reboot/up added 84 worst-case bytes (measured 470); fw added 7 more
         /// (measured 477); vramClock added 18 more (measured 495); watts added 13 more
         /// (measured 508); limitW added 14 more (measured 522); cpuTemp, cpuWatts,
-        /// cpuLimitW and nvmeTemp added 69 more (measured 591), which is this cap.
+        /// cpuLimitW and nvmeTemp added 69 more (measured 591); netName, netType,
+        /// netLink, netRx and netTx added 141 more (measured 732), which is this cap.
         /// <para>
         /// The cap EQUALS the measured worst case (no headroom between them at all),
         /// exactly as it did at 508/508 - but the second interval is no longer spent:
         /// the v5.12.0 raise rode a renegotiation of the receiver floor from >= 512
         /// to >= 1024 bytes (the reference consumer's buffers were raised 496 -> 1024
-        /// in parallel), so 433 bytes now separate this cap from that floor. A further
+        /// in parallel), so 292 bytes still separate this cap from that floor. A further
         /// field therefore raises this constant and re-pins the worst-case test in
         /// the same change - and only a total approaching 1024 reopens the receiver
         /// contract in push_metrics.md. Pinned by the worst-case test, which
-        /// asserts both the exact 591 and this constant.
+        /// asserts both the exact 732 and this constant.
         /// </para>
         /// </summary>
-        internal const int MaxDatagramBytes = 591;
+        internal const int MaxDatagramBytes = 732;
 
         /// <summary>
         /// The push loop re-reads the slow-changing OS-health values every this many
@@ -255,6 +279,13 @@ namespace MetricsPusher.Services
                 _ = diskSensor.Initialize();
                 cpuSensors.Prime();
 
+                // The network sensor joins them: one GetIfEntry2 probe that resolves the
+                // adapter the push goes out by, caches its identity and doubles as the
+                // throughput baseline (its Prime, in effect). Holds no handle, so unlike
+                // its two neighbours it has no Dispose to call in the finally.
+                var netSensor = new NetworkThroughputService();
+                _ = netSensor.Initialize();
+
                 // And usually the OS-health values too (refreshed once a minute below;
                 // queued off-loop so a hung Security Center RPC can never stall sends)
                 SystemMetricsService.RefreshOsHealthInBackground();
@@ -288,6 +319,18 @@ namespace MetricsPusher.Services
                     systemMetrics.CpuPowerWatts = ToWholeWatts(cpuSensors.ReadPackagePower());
                     systemMetrics.CpuPowerLimitWatts = ToWholeWatts(cpuSensors.PackagePowerLimitWatts);
                     systemMetrics.NvmeTemperature = diskSensor.TryRead(out float diskCelsius) ? diskCelsius : null;
+
+                    // One GetIfEntry2 into a reused buffer. Name and media type are
+                    // session-static cached facts (ambient, like the CPU name); link and
+                    // rates come from this tick's read and stay null when it fails.
+                    systemMetrics.NetName = netSensor.AdapterName;
+                    systemMetrics.NetMediaType = netSensor.MediaType;
+                    if (netSensor.TryRead(out NetworkThroughputService.Sample netSample))
+                    {
+                        systemMetrics.NetLinkMbps = netSample.LinkMbps;
+                        systemMetrics.NetRxKbps = netSample.RxKbps;
+                        systemMetrics.NetTxKbps = netSample.TxKbps;
+                    }
 
                     if (++ticksSinceSensorLog >= SensorLogTicks)
                     {
@@ -358,9 +401,10 @@ namespace MetricsPusher.Services
         }
 
         /// <summary>
-        /// One Debug line a minute carrying the CPU/NVMe sensors and CPU provenance. The
-        /// source is included because an ACPI thermal-zone reading and a die reading are not
-        /// the same measurement, and a number alone would not say which one this is.
+        /// One Debug line a minute carrying the CPU/NVMe/network sensors and CPU
+        /// provenance. The source is included because an ACPI thermal-zone reading and a
+        /// die reading are not the same measurement, and a number alone would not say
+        /// which one this is.
         /// </summary>
         /// <param name="systemMetrics">The metrics just collected.</param>
         /// <param name="cpuTemperatureSource">Where the CPU temperature came from.</param>
@@ -369,13 +413,15 @@ namespace MetricsPusher.Services
             LoggingService.Debug(
                 $"GpuDisplayPushService: CPU {systemMetrics.CpuTemperature?.ToString("F1") ?? "-"} C ({cpuTemperatureSource}), " +
                 $"package {systemMetrics.CpuPowerWatts?.ToString() ?? "-"} W of {systemMetrics.CpuPowerLimitWatts?.ToString() ?? "-"} W, " +
-                $"disk {systemMetrics.NvmeTemperature?.ToString("F1") ?? "-"} C");
+                $"disk {systemMetrics.NvmeTemperature?.ToString("F1") ?? "-"} C, " +
+                $"net {systemMetrics.NetRxKbps?.ToString() ?? "-"}/{systemMetrics.NetTxKbps?.ToString() ?? "-"} kbit/s " +
+                $"of {systemMetrics.NetLinkMbps?.ToString() ?? "-"} Mbps");
         }
 
         /// <summary>
         /// Edge-triggered guard for the one contract this service cannot otherwise
         /// enforce at runtime: <see cref="MaxDatagramBytes"/> is pinned by a unit test,
-        /// and the worst case EQUALS that ceiling (591 of 591, under a
+        /// and the worst case EQUALS that ceiling (732 of 732, under a
         /// >= 1024-byte receiver floor). A field added without re-running that
         /// test would overrun a consumer's buffer silently, in the field.
         /// <para>
@@ -481,15 +527,17 @@ namespace MetricsPusher.Services
         /// <summary>
         /// Builds the wire payload. Returns null when every per-tick live metric
         /// (GPU temperature/load/VRAM/fan/power/watts/clocks, CPU usage/temperature/
-        /// power, NVMe temperature, RAM, disk) is null -
-        /// identity/ambient fields (GPU name, host name, CPU name, Windows version,
-        /// uptime, antivirus health, firewall status, pending reboot, enforced power
-        /// limits) alone send no datagram. CpuTemp means a die/package reading; an ACPI
-        /// board-zone reading is deliberately treated as absent on the wire.
+        /// power, NVMe temperature, network rx/tx throughput, RAM, disk) is null -
+        /// identity/ambient fields (GPU name, host name, CPU name, adapter name and
+        /// media type, link speed, Windows version, uptime, antivirus health, firewall
+        /// status, pending reboot, enforced power limits) alone send no datagram.
+        /// CpuTemp means a die/package reading; an ACPI board-zone reading is
+        /// deliberately treated as absent on the wire.
         /// The ambient fields are excluded because they are practically always
-        /// available (uptime always, av/fw/reboot from the slow cache), so counting any
-        /// of them would make this guard dead code and blank the display's last-good
-        /// screen with a names-only payload when every real sensor fails.
+        /// available (uptime always, av/fw/reboot from the slow cache, the network
+        /// identity and link from a session cache and a healthy per-tick read), so
+        /// counting any of them would make this guard dead code and blank the display's
+        /// last-good screen with a names-only payload when every real sensor fails.
         /// </summary>
         private static GpuDisplayPayload? BuildPayload(GpuMetrics metrics, SystemMetrics systemMetrics, string? hostName)
         {
@@ -502,6 +550,7 @@ namespace MetricsPusher.Services
                 GetWireCpuTemperature(systemMetrics) == null &&
                 systemMetrics.CpuPowerWatts == null &&
                 systemMetrics.NvmeTemperature == null &&
+                systemMetrics.NetRxKbps == null && systemMetrics.NetTxKbps == null &&
                 systemMetrics.RamUsedMB == null && systemMetrics.RamTotalMB == null &&
                 systemMetrics.DiskFreeGB == null && systemMetrics.DiskTotalGB == null)
             {
@@ -533,6 +582,11 @@ namespace MetricsPusher.Services
                 RamTotal = systemMetrics.RamTotalMB,
                 DiskFree = systemMetrics.DiskFreeGB,
                 DiskTotal = systemMetrics.DiskTotalGB,
+                NetName = TruncateIdentity(systemMetrics.NetName),
+                NetType = systemMetrics.NetMediaType,
+                NetLink = systemMetrics.NetLinkMbps,
+                NetRx = systemMetrics.NetRxKbps,
+                NetTx = systemMetrics.NetTxKbps,
                 Win = TruncateIdentity(systemMetrics.WindowsVersion, MaxOsVersionLength),
                 Av = systemMetrics.AntivirusHealth,
                 Reboot = systemMetrics.RebootPending,

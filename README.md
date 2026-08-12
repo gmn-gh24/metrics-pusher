@@ -146,7 +146,14 @@ query. It needs no driver and no elevation, but it is not universal:
 The UDP payload publishes die/package CPU temperature as `cpuTemp`, package draw as
 `cpuWatts`, the Intel-only package limit as `cpuLimitW`, and system-disk temperature as
 `nvmeTemp`. The ACPI board-zone fallback is still logged locally but is deliberately omitted
-from `cpuTemp`, so that key never changes physical meaning by machine. See
+from `cpuTemp`, so that key never changes physical meaning by machine.
+
+Since v1.0.1 it also describes the network adapter the datagram itself leaves by — the
+same interface the display address is derived from: `netName` (driver make/model,
+trademark marks stripped), `netType` (0 Ethernet / 1 Wi-Fi / 2 other), `netLink`
+(negotiated Mbps) and `netRx`/`netTx` (throughput in kbit/s, measured over each 1 s
+interval). The whole set costs one `GetIfEntry2` call per tick into a reused buffer —
+no adapter enumeration, no new timer. See
 [push_metrics.md](push_metrics.md) for exact ranges and absence semantics.
 
 ## What has and has not been tested

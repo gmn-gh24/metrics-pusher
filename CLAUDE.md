@@ -9,8 +9,8 @@ on the local subnet: one JSON UDP datagram per second, fire-and-forget. There is
 icon and a menu containing nothing but `Exit`. No installer, no service, no autostart.
 
 The metrics engine was extracted from `R:\Yupix\systray-app` (YupixTrayApp v5.12.1).
-MetricsPusher now adds CPU/NVMe fields to that schema without changing protocol `v: 1`;
-see `push_metrics.md`, which is authoritative for anything on the wire.
+MetricsPusher now adds CPU/NVMe and network fields to that schema without changing
+protocol `v: 1`; see `push_metrics.md`, which is authoritative for anything on the wire.
 
 ## Commands
 
@@ -53,7 +53,8 @@ Logs: `%LOCALAPPDATA%\MetricsPusher\logs\app.log` (10 MB, rotates to `.1`–`.3`
 | `Services/NvmlService.cs` | `nvml.dll` P/Invoke layer |
 | `Services/SystemMetricsService.cs` | CPU (PDH), RAM, disk, Windows version, AV/firewall/reboot |
 | `Services/SampledMetric.cs` | Per-metric read cadences for the NVAPI fallback |
-| `Services/LocalNetworkService.cs` | Local IPv4 selection, feeds address derivation |
+| `Services/LocalNetworkService.cs` | The one adapter-selection walk: feeds both display-address derivation and the network sensor's interface index |
+| `Services/NetworkThroughputService.cs` | The `net*` wire fields: one `GetIfEntry2`/tick into a reused buffer, hand-pinned `MIB_IF_ROW2` offsets (self-checked at probe and pinned against `Marshal.OffsetOf` by a test), RAPL-style rate window for `netRx`/`netTx` |
 | `Services/SystemLibraryResolver.cs` | Pins every P/Invoked native library to absolute System32 |
 | `Services/PawnIoDevice.cs` | PawnIO IOCTL layer: open the device, load a signed module, execute a function. Not thread-safe, same contract as `NvmlService` |
 | `Services/CpuTemperatureService.cs` | Provider selection, latching, caching, edge-triggered logging. The only CPU-sensor type the rest of the app talks to |
@@ -91,7 +92,7 @@ Logs: `%LOCALAPPDATA%\MetricsPusher\logs\app.log` (10 MB, rotates to `.1`–`.3`
   so anything touching a shared path must tolerate a second writer (`LoggingService` opens
   the log `FileShare.ReadWrite` for exactly this reason).
 - **Every native library loads from System32, by absolute path.** `SystemLibraryResolver`
-  pins `nvml` / `pdh` / `wscapi` / `nvapi64`, and `CA5392` is an **error** so a new
+  pins `nvml` / `pdh` / `wscapi` / `nvapi64` / `iphlpapi`, and `CA5392` is an **error** so a new
   `DllImport` cannot reintroduce a searched load. Adding a P/Invoke means adding its
   library to `GuardedLibraries` unless it is a KnownDLL.
 - **.NET 10 (LTS).** Every publish is self-contained, so the runtime ships inside the exe
@@ -113,12 +114,20 @@ Logs: `%LOCALAPPDATA%\MetricsPusher\logs\app.log` (10 MB, rotates to `.1`–`.3`
   speaks the same protocol `1` the originating tray app's v5.12.0 spoke. Spelled out in
   `push_metrics.md` §3.
 - **Adding a wire field means raising `MaxDatagramBytes` and re-pinning the worst-case
-  test in the same change.** The worst case (591) *equals* the ceiling by design; there
+  test in the same change.** The worst case (732) *equals* the ceiling by design; there
   is no slack. Only a total approaching 1024 reopens the receiver contract.
 - **`cpuTemp` is die/package-only.** `CpuTemperatureSource` travels with each reading;
   `BuildPayload` maps `IntelPackageMsr` and `AmdTctlSmn` but deliberately omits
   `AcpiThermalZone`. The ACPI fallback is a motherboard sensor with different placement
   and lag, so serializing it under the same key would silently change the field's meaning.
+- **The network fields ride ONE `GetIfEntry2` per tick, and only `netRx`/`netTx` are
+  live for the suppression guard.** `netName`/`netType`/`netLink` are ambient for the
+  same reason `limitW` is — counting them as live would make the guard dead code.
+  `NetworkThroughputService`'s `MIB_IF_ROW2` offsets are hand-pinned for x64: they are
+  self-checked at probe (requested index must echo back) and pinned by a test against
+  `Marshal.OffsetOf` on an equivalent struct — change them only with both in the same
+  commit. The adapter is resolved once per session via `LocalNetworkService`'s single
+  selection walk; do not add a second walk that could disagree with address derivation.
 - **`NvmlService` is deliberately not thread-safe.** Every member must be called under
   `GpuMonitorService._lock`.
 - **The PawnIO device is opened `FILE_SHARE_READ | FILE_SHARE_WRITE` on purpose.** Do not

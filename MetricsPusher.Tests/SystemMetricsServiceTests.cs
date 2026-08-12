@@ -12,6 +12,8 @@ namespace MetricsPusher.Tests
         [InlineData("AMD Ryzen 7 5700G with Radeon Graphics", "AMD Ryzen 7 5700G")]
         [InlineData("  Intel(R)  Celeron(R)   N4020  ", "Intel Celeron N4020")]
         [InlineData("AMD Ryzen 9 7950X3D 16-Core  Processor", "AMD Ryzen 9 7950X3D")]
+        [InlineData("SomeVendor(C) Model X CPU @ 2.00GHz", "SomeVendor Model X")] // (C) strips like (R)/(TM)
+        [InlineData("intel(r) core(tm) i5-6500", "intel core i5-6500")] // Marks match case-insensitively
         public void NormalizeCpuName_ShouldStripMarketingNoise_ForVariousCpus(string input, string expected)
         {
             // Act
@@ -19,6 +21,51 @@ namespace MetricsPusher.Tests
 
             // Assert
             Assert.Equal(expected, result);
+        }
+
+        [Theory]
+        [InlineData("Intel(R) Ethernet Controller I225-V", "Intel Ethernet Controller I225-V")]
+        [InlineData("Killer(TM) Wi-Fi 6E AX1675", "Killer Wi-Fi 6E AX1675")]
+        [InlineData("Contoso(C) 10G NIC", "Contoso 10G NIC")]
+        [InlineData("realtek(r) pcie gbe family controller", "realtek pcie gbe family controller")]
+        [InlineData("Realtek PCIe 5GbE Family Controller", "Realtek PCIe 5GbE Family Controller")] // No marks: unchanged
+        [InlineData("Intel(R)   Ethernet(R)  Connection", "Intel Ethernet Connection")] // Whitespace collapses
+        public void StripTrademarkMarks_ShouldStripMarksAndCollapseWhitespace_ForAdapterNames(string input, string expected)
+        {
+            // Act
+            var result = SystemMetricsService.StripTrademarkMarks(input);
+
+            // Assert
+            Assert.Equal(expected, result);
+        }
+
+        [Theory]
+        [InlineData(null)]
+        [InlineData("")]
+        [InlineData("   ")]
+        [InlineData("(R)(TM)(C)")]
+        public void StripTrademarkMarks_ShouldReturnNull_WhenNothingSurvives(string? input)
+        {
+            // Act
+            var result = SystemMetricsService.StripTrademarkMarks(input);
+
+            // Assert
+            Assert.Null(result);
+        }
+
+        [Fact]
+        public void StripTrademarkMarks_ShouldNotApplyCpuSpecificRules_ToAdapterNames()
+        {
+            // Arrange - the shared rule is marks-and-whitespace ONLY. The CPU-specific
+            // patterns ("CPU", clock suffixes, "N-Core Processor") must not leak into
+            // adapter names, where those tokens can be legitimate model text.
+            const string name = "Broadcom NetXtreme CPU Offload Adapter @ 2.5GHz";
+
+            // Act
+            var result = SystemMetricsService.StripTrademarkMarks(name);
+
+            // Assert
+            Assert.Equal(name, result);
         }
 
         [Theory]

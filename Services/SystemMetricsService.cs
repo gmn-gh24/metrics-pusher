@@ -41,6 +41,25 @@ namespace MetricsPusher.Services
 
         /// <summary>System disk temperature in °C, from IOCTL_STORAGE_QUERY_PROPERTY.</summary>
         public float? NvmeTemperature { get; set; }
+
+        /// <summary>
+        /// Primary network adapter's driver description (make/model), trademark marks
+        /// already stripped. Session-static, served from
+        /// <see cref="NetworkThroughputService"/>'s cache.
+        /// </summary>
+        public string? NetName { get; set; }
+
+        /// <summary>Primary adapter media type for the wire: 0 = Ethernet, 1 = Wi-Fi, 2 = other.</summary>
+        public int? NetMediaType { get; set; }
+
+        /// <summary>Negotiated link speed of the primary adapter in whole Mbps.</summary>
+        public int? NetLinkMbps { get; set; }
+
+        /// <summary>Receive throughput in whole kbit/s over the last measured interval (0 = idle).</summary>
+        public long? NetRxKbps { get; set; }
+
+        /// <summary>Transmit throughput in whole kbit/s over the last measured interval (0 = idle).</summary>
+        public long? NetTxKbps { get; set; }
     }
 
     /// <summary>
@@ -244,9 +263,31 @@ namespace MetricsPusher.Services
         }
 
         /// <summary>
-        /// Strips marketing noise from a raw ProcessorNameString - "(R)"/"(TM)" marks,
-        /// clock suffixes ("@ 3.20GHz"), "CPU", "N-Core Processor", "with Radeon
-        /// Graphics" - and collapses whitespace. Returns null when nothing survives.
+        /// Strips trademark marks - "(R)", "(C)", "(TM)", any casing - and collapses
+        /// whitespace. Returns null when nothing survives. The one cleaning rule the CPU
+        /// name and the network adapter name share: adapter descriptions carry the same
+        /// marks ("Intel(R) Ethernet Controller I225-V") but none of the CPU-specific
+        /// noise, so <see cref="NormalizeCpuName"/> layers its own patterns on top of
+        /// this rather than the two fields maintaining two mark lists.
+        /// </summary>
+        /// <param name="name">The raw identity string.</param>
+        /// <returns>The cleaned name, or null when nothing survives.</returns>
+        internal static string? StripTrademarkMarks(string? name)
+        {
+            if (string.IsNullOrWhiteSpace(name))
+                return null;
+
+            const RegexOptions options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
+            string cleaned = Regex.Replace(name, @"\((R|C|TM)\)", string.Empty, options);
+            cleaned = Regex.Replace(cleaned, @"\s+", " ").Trim();
+            return cleaned.Length == 0 ? null : cleaned;
+        }
+
+        /// <summary>
+        /// Strips marketing noise from a raw ProcessorNameString - trademark marks (via
+        /// <see cref="StripTrademarkMarks"/>), clock suffixes ("@ 3.20GHz"), "CPU",
+        /// "N-Core Processor", "with Radeon Graphics" - and collapses whitespace.
+        /// Returns null when nothing survives.
         /// </summary>
         internal static string? NormalizeCpuName(string? rawName)
         {
@@ -254,13 +295,11 @@ namespace MetricsPusher.Services
                 return null;
 
             const RegexOptions options = RegexOptions.IgnoreCase | RegexOptions.CultureInvariant;
-            string name = Regex.Replace(rawName, @"\((R|TM)\)", string.Empty, options);
-            name = Regex.Replace(name, @"@\s*\d+(\.\d+)?\s*GHz", string.Empty, options);
+            string name = Regex.Replace(rawName, @"@\s*\d+(\.\d+)?\s*GHz", string.Empty, options);
             name = Regex.Replace(name, @"\b\d+-Core\s+Processor\b", string.Empty, options);
             name = Regex.Replace(name, @"\bwith\s+Radeon\s+Graphics\b", string.Empty, options);
             name = Regex.Replace(name, @"\bCPU\b", string.Empty, options);
-            name = Regex.Replace(name, @"\s+", " ").Trim();
-            return name.Length == 0 ? null : name;
+            return StripTrademarkMarks(name);
         }
 
         private static string? ReadCpuName()

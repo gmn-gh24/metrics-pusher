@@ -138,6 +138,11 @@ namespace MetricsPusher.Tests
                 RamTotalMB = 65536,
                 DiskFreeGB = 512,
                 DiskTotalGB = 1863,
+                NetName = "Intel Ethernet Controller I225-V", // Arrives pre-stripped: the service strips marks at its probe
+                NetMediaType = 0,
+                NetLinkMbps = 2500,
+                NetRxKbps = 94210,
+                NetTxKbps = 1180,
                 WindowsVersion = "11 23H2",
                 AntivirusHealth = 0,
                 RebootPending = 0,
@@ -150,7 +155,7 @@ namespace MetricsPusher.Tests
 
             // Assert - exact string pins the wire key order and number formatting
             Assert.Equal(
-                "{\"v\":1,\"gpu\":\"NVIDIA GeForce RTX 4070\",\"host\":\"TEST-HOST-001\",\"temp\":62.5,\"load\":45,\"vramUsed\":3821,\"vramTotal\":12282,\"fan\":38,\"power\":87,\"watts\":174,\"limitW\":200,\"clock\":2610,\"vramClock\":10501,\"cpu\":\"Intel Core i9-14900K\",\"cpuLoad\":31,\"cpuTemp\":71.5,\"cpuWatts\":125,\"cpuLimitW\":253,\"nvmeTemp\":42.5,\"ramUsed\":18432,\"ramTotal\":65536,\"diskFree\":512,\"diskTotal\":1863,\"win\":\"11 23H2\",\"av\":0,\"reboot\":0,\"fw\":1,\"up\":345600}",
+                "{\"v\":1,\"gpu\":\"NVIDIA GeForce RTX 4070\",\"host\":\"TEST-HOST-001\",\"temp\":62.5,\"load\":45,\"vramUsed\":3821,\"vramTotal\":12282,\"fan\":38,\"power\":87,\"watts\":174,\"limitW\":200,\"clock\":2610,\"vramClock\":10501,\"cpu\":\"Intel Core i9-14900K\",\"cpuLoad\":31,\"cpuTemp\":71.5,\"cpuWatts\":125,\"cpuLimitW\":253,\"nvmeTemp\":42.5,\"ramUsed\":18432,\"ramTotal\":65536,\"diskFree\":512,\"diskTotal\":1863,\"netName\":\"Intel Ethernet Controller I225-V\",\"netType\":0,\"netLink\":2500,\"netRx\":94210,\"netTx\":1180,\"win\":\"11 23H2\",\"av\":0,\"reboot\":0,\"fw\":1,\"up\":345600}",
                 json);
         }
 
@@ -196,6 +201,11 @@ namespace MetricsPusher.Tests
             Assert.DoesNotContain("\"cpuWatts\"", json);
             Assert.DoesNotContain("\"cpuLimitW\"", json);
             Assert.DoesNotContain("\"nvmeTemp\"", json);
+            Assert.DoesNotContain("\"netName\"", json);
+            Assert.DoesNotContain("\"netType\"", json);
+            Assert.DoesNotContain("\"netLink\"", json);
+            Assert.DoesNotContain("\"netRx\"", json);
+            Assert.DoesNotContain("\"netTx\"", json);
             Assert.DoesNotContain("\"win\"", json);
             Assert.DoesNotContain("\"av\"", json);
             Assert.DoesNotContain("\"reboot\"", json);
@@ -285,6 +295,97 @@ namespace MetricsPusher.Tests
 
             // Assert
             Assert.Equal("{\"v\":1,\"temp\":60}", json);
+        }
+
+        [Fact]
+        public void BuildPayloadJson_ShouldPinNetworkFieldOrderAndFormatting_WhenOnlyNetworkFieldsPresent()
+        {
+            // Arrange - a Wi-Fi shape: netType 1 and a fractional-gig link
+            var systemMetrics = new SystemMetrics
+            {
+                NetName = "Intel Wi-Fi 6E AX211 160MHz",
+                NetMediaType = 1,
+                NetLinkMbps = 1200,
+                NetRxKbps = 41300,
+                NetTxKbps = 880,
+            };
+
+            // Act
+            var json = GpuDisplayPushService.BuildPayloadJson(new GpuMetrics(), systemMetrics, null);
+
+            // Assert - exact string pins the five keys' order and integer formatting
+            Assert.Equal(
+                "{\"v\":1,\"netName\":\"Intel Wi-Fi 6E AX211 160MHz\",\"netType\":1,\"netLink\":1200,\"netRx\":41300,\"netTx\":880}",
+                json);
+        }
+
+        [Fact]
+        public void BuildPayloadJson_ShouldReturnNull_WhenOnlyNetworkIdentityAndLinkPresent()
+        {
+            // Arrange - name, media type and link speed are ambient: session-static (or
+            // healthy-read-static) facts that are practically always present, so counting
+            // any of them as live would make the suppression guard dead code and let a
+            // names-and-link payload blank the display when every real sensor fails.
+            var systemMetrics = new SystemMetrics
+            {
+                NetName = "Intel Ethernet Controller I225-V",
+                NetMediaType = 0,
+                NetLinkMbps = 2500,
+            };
+
+            // Act
+            var json = GpuDisplayPushService.BuildPayloadJson(new GpuMetrics(), systemMetrics, "TEST-HOST-001");
+
+            // Assert
+            Assert.Null(json);
+        }
+
+        [Fact]
+        public void BuildPayloadJson_ShouldProduceJson_WhenOnlyNetRxPresent()
+        {
+            // Arrange - rx throughput is a live measurement and must defeat suppression
+            // on its own - and zero is a real reading (an idle adapter), not an absence
+            var systemMetrics = new SystemMetrics { NetRxKbps = 0 };
+
+            // Act
+            var json = GpuDisplayPushService.BuildPayloadJson(new GpuMetrics(), systemMetrics, null);
+
+            // Assert
+            Assert.Equal("{\"v\":1,\"netRx\":0}", json);
+        }
+
+        [Fact]
+        public void BuildPayloadJson_ShouldProduceJson_WhenOnlyNetTxPresent()
+        {
+            // Arrange - tx and rx are validated and dropped independently, so each must
+            // carry the datagram alone (a counter reset can null one and not the other)
+            var systemMetrics = new SystemMetrics { NetTxKbps = 512 };
+
+            // Act
+            var json = GpuDisplayPushService.BuildPayloadJson(new GpuMetrics(), systemMetrics, null);
+
+            // Assert
+            Assert.Equal("{\"v\":1,\"netTx\":512}", json);
+        }
+
+        [Fact]
+        public void BuildPayloadJson_ShouldTruncateNetName_WhenLongerThanTheIdentityCap()
+        {
+            // Arrange - netName shares MaxIdentityLength with gpu/host/cpu: same cap,
+            // same encoded-byte semantics, same TruncateIdentity path
+            int cap = GpuDisplayPushService.MaxIdentityLength;
+            var systemMetrics = new SystemMetrics
+            {
+                NetName = new string('N', cap + 20),
+                NetRxKbps = 10, // A live metric so the datagram is sent at all
+            };
+
+            // Act
+            var json = GpuDisplayPushService.BuildPayloadJson(new GpuMetrics(), systemMetrics, null);
+
+            // Assert
+            Assert.NotNull(json);
+            Assert.Contains($"\"netName\":\"{new string('N', cap)}\"", json);
         }
 
         [Fact]
@@ -596,6 +697,7 @@ namespace MetricsPusher.Tests
             var systemMetrics = new SystemMetrics
             {
                 CpuName = new string('中', 100),
+                NetName = new string('é', 100),
                 WindowsVersion = new string('é', 30),
                 AntivirusHealth = 0,
                 FirewallEnabled = 0,
@@ -613,7 +715,7 @@ namespace MetricsPusher.Tests
         public void BuildPayloadJson_ShouldFitDatagramBudget_WhenEveryFieldIsAtItsWorstCase()
         {
             // Arrange - the per-field identity cap and the whole-datagram budget are
-            // separate limits, so this pins them together: three maxed-out identity
+            // separate limits, so this pins them together: four maxed-out identity
             // strings alongside the widest numbers plausible hardware can report.
             var metrics = new GpuMetrics
             {
@@ -651,6 +753,11 @@ namespace MetricsPusher.Tests
                 RamTotalMB = 8388608,
                 DiskFreeGB = 1048576,  // 1 PB system volume
                 DiskTotalGB = 1048576,
+                NetName = new string('N', GpuDisplayPushService.MaxIdentityLength),
+                NetMediaType = 2,
+                NetLinkMbps = 400000,      // The inclusive plausibility cap (6 digits)
+                NetRxKbps = 100_000_000,   // The inclusive 100 Gbit/s rate cap (9 digits)
+                NetTxKbps = 100_000_000,
                 WindowsVersion = new string('W', GpuDisplayPushService.MaxOsVersionLength),
                 AntivirusHealth = 2,
                 RebootPending = 1,
@@ -671,22 +778,24 @@ namespace MetricsPusher.Tests
             Assert.True(byteCount <= GpuDisplayPushService.MaxDatagramBytes, overBudgetMessage);
 
             // ... and the exact figure is pinned, because there is no slack left
-            // between the worst case and the ceiling: the four CPU/NVMe fields add 69
-            // bytes to v5.12.0's 522-byte worst case for 591. The receiver floor remains
-            // >= 1024, so 433 bytes separate the ceiling from the floor: the NEXT field
+            // between the worst case and the ceiling: the four CPU/NVMe fields added 69
+            // bytes to v5.12.0's 522-byte worst case for 591, and the five network
+            // fields add 141 more for 732. The receiver floor remains
+            // >= 1024, so 292 bytes separate the ceiling from the floor: the NEXT field
             // is still a sender-side change
             // again - raise MaxDatagramBytes, re-pin this test and update
             // push_metrics.md section 3.3 together - until the total approaches 1024.
-            Assert.Equal(591, byteCount);
-            Assert.Equal(591, GpuDisplayPushService.MaxDatagramBytes);
+            Assert.Equal(732, byteCount);
+            Assert.Equal(732, GpuDisplayPushService.MaxDatagramBytes);
         }
 
         [Fact]
         public void BuildPayloadJson_ShouldStayWellUnderBudget_WhenHardwareIsTypical()
         {
-            // Arrange - representative desktop; the class doc promises ~415 bytes here
+            // Arrange - representative desktop; the class doc promises ~515 bytes here
             // (311 at v5.9.0, +18 for vramClock, +12 for a typical three-digit watts,
-            // +13 for a typical three-digit limitW)
+            // +13 for a typical three-digit limitW, +100 for the five network fields
+            // with a typical 35-character adapter name)
             var metrics = new GpuMetrics
             {
                 Name = "NVIDIA GeForce RTX 4070",
@@ -714,6 +823,11 @@ namespace MetricsPusher.Tests
                 RamTotalMB = 65536,
                 DiskFreeGB = 812,
                 DiskTotalGB = 1863,
+                NetName = "Realtek PCIe 5GbE Family Controller",
+                NetMediaType = 0,
+                NetLinkMbps = 5000,
+                NetRxKbps = 1523,
+                NetTxKbps = 214,
                 WindowsVersion = "11 23H2",
                 AntivirusHealth = 0,
                 RebootPending = 0,
@@ -726,7 +840,7 @@ namespace MetricsPusher.Tests
 
             // Assert
             Assert.NotNull(json);
-            Assert.InRange(Encoding.UTF8.GetByteCount(json), 1, 425);
+            Assert.InRange(Encoding.UTF8.GetByteCount(json), 1, 525);
         }
 
         [Fact]
@@ -898,24 +1012,27 @@ namespace MetricsPusher.Tests
         {
             // Assert - edge-triggered like the send-failure logging beside it: an
             // oversize payload repeats every second, and one line per streak is a
-            // diagnostic while one line per tick is a log flood
-            Assert.True(GpuDisplayPushService.NoteOversizeDatagram(600, alreadyWarned: true));
+            // diagnostic while one line per tick is a log flood. Ceiling-relative,
+            // because a raised MaxDatagramBytes must not quietly turn "oversize"
+            // fixtures into under-budget ones.
+            Assert.True(GpuDisplayPushService.NoteOversizeDatagram(GpuDisplayPushService.MaxDatagramBytes + 9, alreadyWarned: true));
         }
 
         [Fact]
         public void NoteOversizeDatagram_ShouldRearm_WhenDatagramsFitAgain()
         {
-            // Arrange - a streak that ends (the GPU name shortened, a field went null)
-            bool warned = GpuDisplayPushService.NoteOversizeDatagram(600, alreadyWarned: false);
+            // Arrange - a streak that ends (the GPU name shortened, a field went null).
+            // Ceiling-relative for the same reason as the streak test above.
+            bool warned = GpuDisplayPushService.NoteOversizeDatagram(GpuDisplayPushService.MaxDatagramBytes + 9, alreadyWarned: false);
             Assert.True(warned);
 
             // Act
-            warned = GpuDisplayPushService.NoteOversizeDatagram(400, warned);
+            warned = GpuDisplayPushService.NoteOversizeDatagram(GpuDisplayPushService.MaxDatagramBytes - 100, warned);
 
             // Assert - back under budget clears the latch, so a LATER overrun is reported
             // again rather than swallowed for the rest of the session
             Assert.False(warned);
-            Assert.True(GpuDisplayPushService.NoteOversizeDatagram(600, warned));
+            Assert.True(GpuDisplayPushService.NoteOversizeDatagram(GpuDisplayPushService.MaxDatagramBytes + 9, warned));
         }
 
         [Fact]

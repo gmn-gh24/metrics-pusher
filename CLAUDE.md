@@ -15,6 +15,7 @@ see `push_metrics.md`, which is authoritative for anything on the wire.
 ## Commands
 
 ```powershell
+dotnet restore --locked-mode   # verifies packages.lock.json; NuGetAudit fails on a known CVE
 dotnet build --warnaserror     # must be clean - StyleCop + Roslynator + CA5392 are enforced
 dotnet test
 dotnet test --filter "FullyQualifiedName~GpuDisplayPushServiceTests"
@@ -68,6 +69,7 @@ Logs: `%LOCALAPPDATA%\MetricsPusher\logs\app.log` (10 MB, rotates to `.1`–`.3`
 | `Resources/PawnIo/` | The two embedded signed modules (`IntelMSR.bin`, `AMDFamily17.bin`) and their `COPYING`; `Resources/PawnIO_setup.exe` is the bundled 2.2.0 installer |
 | `push_metrics.md` | Authoritative UDP wire protocol. Update it in the same change as any wire-visible change |
 | `README.md` | User-facing: requirements, publish, **where to install it and why** |
+| `AGENTS.md` | Contributor guidelines for other agent harnesses. Not auto-loaded by Claude Code — anything binding must also live here |
 
 ## Constraints
 
@@ -171,6 +173,11 @@ pass cleanly. `.editorconfig` mandates CRLF line endings.
 The services under `Services/` are a verbatim extraction carrying hard-won behavior
 (handle-loss strike counting, latched legacy-API fallbacks, backend splits). Do not
 "clean them up" — changes there risk changing what goes on the wire.
+
+Use plain `git`; **do not invoke `gh`** — this repo has no GitHub-CLI workflow. On an explicit
+commit-and-push request, review the diff, stage only the files asked for, then push the current
+branch to its configured remote. Commit subjects are short, imperative, sentence-case. Tests are
+`<TypeName>Tests.cs` / `Member_ShouldExpectedBehavior_WhenCondition`.
 
 Sensor cross-checks against HWiNFO64 and CrystalDiskInfo are **not** to be run: the user
 declined those tools, so do not install or suggest them. `WHATSLEFT.md` marks those items
